@@ -18,8 +18,8 @@ export default function RoomShell({ children }) {
   const { mode } = useSystem();
 
   return (
-    <div className="dark min-h-screen bg-background text-foreground flex">
-      <aside className="w-56 shrink-0 border-r border-border/60 flex flex-col bg-[#0b0f15] sticky top-0 h-screen">
+    <div className="dark min-h-screen lg:h-screen lg:overflow-hidden bg-background text-foreground flex" translate="no">
+      <aside className="w-44 shrink-0 border-r border-border/60 flex flex-col bg-[#0b0f15] sticky top-0 h-screen">
         <div className="h-14 flex items-center px-4 border-b border-border/60 gap-2">
           <div className="w-6 h-6 rounded-sm bg-primary text-primary-foreground grid place-items-center shrink-0">
             <Sparkles className="w-3.5 h-3.5" strokeWidth={2} />
@@ -62,8 +62,8 @@ export default function RoomShell({ children }) {
         </div>
       </aside>
 
-      <div className="flex-1 min-w-0">
-        <main className="p-4 sm:p-6 lg:p-8 max-w-[1800px] mx-auto">{children}</main>
+      <div className="flex-1 min-w-0 lg:h-screen lg:overflow-y-auto">
+        <main className="p-4 sm:p-5 lg:p-5 max-w-[1800px] mx-auto lg:h-full lg:flex lg:flex-col">{children}</main>
       </div>
     </div>
   );

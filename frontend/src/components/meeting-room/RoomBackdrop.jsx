@@ -1,60 +1,87 @@
-import { MonitorSpeaker } from "lucide-react";
-import Seat from "./Seat";
+import { Fragment } from "react";
+import { ImageOff } from "lucide-react";
+import { AGENT_REGISTRY } from "./agentRegistry";
+import PersonLayer from "./PersonLayer";
+import AgentTag from "./AgentTag";
+import CoordinatorScreen from "./CoordinatorScreen";
 
-// Composizione della sala: illustrazione CSS statica (nessuna foto, nessuna
-// animazione 3D — principio 6), predisposta per una futura fotografia reale
-// tramite la prop `photoUrl` (oggi assente: il contenitore mostra solo lo
-// sfondo/tavolo disegnati). Quando una foto sarà disponibile basterà
-// valorizzare `photoUrl`: il markup dei seggi resta invariato, sovrapposto.
-export default function RoomBackdrop({ seats, selectedId, onSelectSeat, photoUrl }) {
-  const owner = seats.find((s) => s.kind === "owner");
-  const coordinator = seats.find((s) => s.side === "far");
-  const leftSeats = seats.filter((s) => s.side === "left");
-  const rightSeats = seats.filter((s) => s.side === "right");
+// Quando l'immagine reale esiste, sostituire con:
+//   import ROOM_BASE_PHOTO from "@/assets/meeting-room/layers/meeting-room-base-empty.webp";
+const ROOM_BASE_PHOTO = null;
+
+// Sfondo della sala — architettura a LIVELLI (non più due fotografie
+// diverse per modalità):
+//   1. livello base: fotografia fissa (sala, tavolo, tutte le sedie/
+//      postazioni vuote, imprenditore a capotavola) — sempre la stessa,
+//      qualunque sia activeAgentIds.
+//   2. livelli collaboratore: per ciascuna voce di AGENT_REGISTRY il cui
+//      agent_id è in activeAgentIds, un PersonLayer (ritaglio trasparente a
+//      piena tela) + una AgentTag, entrambi ancorati alle coordinate del
+//      registry. Un ruolo non attivo non viene renderizzato affatto: tavolo,
+//      sedie e collaboratori non si spostano mai.
+//   3. Coordinatore ACTELYA: presenza digitale separata, sempre visibile,
+//      non fa mai parte di activeAgentIds.
+// Tutto vive dentro lo stesso stage 16:9 (fotografia e overlay condividono
+// il sistema di coordinate, si ritagliano/scalano insieme a qualunque
+// dimensione della finestra).
+export default function RoomBackdrop({ activeAgentIds, seats, selectedId, onSelectSeat }) {
+  const coordinator = seats.find((s) => s.kind === "coordinator");
+  const activeSet = new Set(activeAgentIds || []);
+  const seatByAgentId = Object.fromEntries(
+    seats.filter((s) => s.kind === "collaborator").map((s) => [s.agent_id, s])
+  );
 
   return (
     <div
       data-testid="room-backdrop"
-      className="relative rounded-xl border border-border/60 overflow-hidden bg-gradient-to-b from-[#141a24] via-[#10151d] to-[#0b0f15] px-4 py-6 sm:px-8 sm:py-8"
-      style={photoUrl ? { backgroundImage: `url(${photoUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
+      className="relative w-full h-[38vh] lg:h-auto lg:flex-1 min-h-0 rounded-xl border border-border/60 overflow-hidden bg-[#0b0f15]"
     >
-      {/* "Schermo" di fondo sala — elemento reale, non testo incorporato in un'immagine */}
-      <div className="mx-auto mb-6 max-w-xs rounded-md border border-border/50 bg-black/40 px-4 py-3 text-center">
-        <div className="flex items-center justify-center gap-1.5 text-foreground/90">
-          <MonitorSpeaker className="w-3.5 h-3.5" strokeWidth={1.75} />
-          <span className="font-display text-xs font-semibold tracking-tight">ACTELYA 3</span>
-        </div>
-        <div className="text-[10px] text-muted-foreground mt-0.5">Il tuo team di esperti al lavoro</div>
-      </div>
+      <div
+        data-testid="room-stage"
+        className="absolute w-full aspect-video top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+      >
+        {ROOM_BASE_PHOTO ? (
+          <img
+            src={ROOM_BASE_PHOTO}
+            alt="Sala riunioni ACTELYA 3"
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        ) : (
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground bg-[#11161f]"
+            data-testid="room-backdrop-missing"
+          >
+            <ImageOff className="w-6 h-6" strokeWidth={1.5} />
+            <p className="text-xs text-center max-w-xs">
+              Fotografia di base non ancora disponibile.<br />
+              Attesa: frontend/src/assets/meeting-room/layers/meeting-room-base-empty.webp
+            </p>
+          </div>
+        )}
 
-      {/* Coordinatore — "sul fondo" della sala (principio 3) */}
-      <div className="flex justify-center mb-6">
-        <Seat seat={coordinator} selected={selectedId === coordinator.id} onSelect={onSelectSeat} />
-      </div>
+        {/* Overlay molto leggero: solo per la leggibilità delle targhette */}
+        <div className="absolute inset-0 bg-black/15 pointer-events-none" />
 
-      {/* Tavolo rettangolare con angoli arrotondati + collaboratori sui lati (principio 2) */}
-      <div className="flex flex-col md:flex-row items-center md:items-stretch justify-center gap-4 md:gap-6">
-        <div className="flex md:flex-col items-center justify-center gap-4 md:gap-6 md:py-6">
-          {leftSeats.map((s) => (
-            <Seat key={s.id} seat={s} selected={selectedId === s.id} onSelect={onSelectSeat} />
-          ))}
-        </div>
+        {AGENT_REGISTRY.map((agent) => {
+          if (!activeSet.has(agent.agent_id)) return null;
+          const seat = seatByAgentId[agent.agent_id];
+          return (
+            <Fragment key={agent.agent_id}>
+              <PersonLayer agent={agent} />
+              <AgentTag
+                agent={agent}
+                status={seat?.status}
+                selected={selectedId === agent.agent_id}
+                onSelect={() => seat && onSelectSeat(seat)}
+              />
+            </Fragment>
+          );
+        })}
 
-        <div
-          data-testid="meeting-table"
-          className="w-full max-w-md md:max-w-none md:w-40 h-16 md:h-auto md:min-h-[220px] rounded-2xl bg-gradient-to-br from-[#6b4a30] via-[#5a3c26] to-[#432c1a] border border-black/30 shadow-inner"
-        />
-
-        <div className="flex md:flex-col items-center justify-center gap-4 md:gap-6 md:py-6">
-          {rightSeats.map((s) => (
-            <Seat key={s.id} seat={s} selected={selectedId === s.id} onSelect={onSelectSeat} />
-          ))}
-        </div>
-      </div>
-
-      {/* Imprenditore — a capotavola, vicino a chi guarda (principio 1) */}
-      <div className="flex justify-center mt-6">
-        <Seat seat={owner} selected={false} onSelect={onSelectSeat} />
+        {/* Coordinatore ACTELYA: presenza digitale sullo schermo, non una persona seduta */}
+        {coordinator && (
+          <CoordinatorScreen seat={coordinator} selected={selectedId === coordinator.id} onSelect={onSelectSeat} />
+        )}
       </div>
     </div>
   );

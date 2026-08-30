@@ -62,6 +62,11 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/cambia-password" element={<ChangePassword />} />
             <Route path="/sala-riunioni" element={<Protected bare><SalaRiunioni /></Protected>} />
+            {/* Anteprima solo sviluppo: stesso componente/dati demo della pagina reale, nessun login,
+                esclusa dalla build di produzione (process.env.NODE_ENV e' sostituito a build time). */}
+            {process.env.NODE_ENV === "development" && (
+              <Route path="/sala-riunioni-preview" element={<SalaRiunioni />} />
+            )}
             {routes.map(([path, el]) => (
               <Route key={path} path={path} element={<Protected>{el}</Protected>} />
             ))}

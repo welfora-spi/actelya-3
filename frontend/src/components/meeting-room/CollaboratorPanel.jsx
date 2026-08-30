@@ -1,7 +1,6 @@
-import { Target, FileText, CheckCircle2, Circle, MessageSquareText, CheckCircle } from "lucide-react";
+import { Target, FileText, CheckCircle2, Circle, MessageSquareText, CheckCircle, Users, Activity, Clock3 } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Empty } from "@/components/Primitives";
 import { SEAT_STATUS_META, DELIVERABLE_STATUS_META, isValidDeliverable } from "./adapter";
 import SeatStatusBadge from "./SeatStatusBadge";
 
@@ -10,18 +9,38 @@ function initials(name) {
   return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase()).join("");
 }
 
+function SummaryRow({ icon: Icon, label, value, tone = "" }) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-3 py-2">
+      <span className="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
+        <Icon className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} />
+        <span className="truncate">{label}</span>
+      </span>
+      <span className={`font-display text-base font-semibold shrink-0 ${tone}`}>{value}</span>
+    </div>
+  );
+}
+
 function HistoryDot({ state }) {
   if (state === "done") return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" strokeWidth={1.75} />;
   if (state === "active") return <Circle className="w-3.5 h-3.5 text-sky-400 shrink-0" strokeWidth={1.75} />;
   return <Circle className="w-3.5 h-3.5 text-muted-foreground/40 shrink-0" strokeWidth={1.75} />;
 }
 
-export default function CollaboratorPanel({ collaborator }) {
+export default function CollaboratorPanel({ collaborator, summary }) {
   if (!collaborator) {
     return (
-      <div className="p-5">
-        <h2 className="font-display text-lg font-medium mb-3">Collaboratore selezionato</h2>
-        <Empty text="Seleziona un collaboratore in sala riunioni per vedere l'attività in corso." />
+      <div className="p-4" data-testid="collaborator-panel-empty">
+        <h2 className="font-display text-base font-medium mb-1">Collaboratore selezionato</h2>
+        <p className="text-xs text-muted-foreground mb-4">Seleziona un collaboratore in sala riunioni per vedere l'attività in corso.</p>
+        {summary && (
+          <div className="space-y-2" data-testid="meeting-summary">
+            <div className="label-caps mb-1">Riepilogo riunione</div>
+            <SummaryRow icon={Users} label="Collaboratori convocati" value={summary.collaboratorsCount} />
+            <SummaryRow icon={Activity} label="Attività al lavoro" value={summary.activeCount} tone="text-emerald-400" />
+            <SummaryRow icon={Clock3} label="Deliverable in approvazione" value={summary.pendingApprovalCount} tone="text-amber-400" />
+          </div>
+        )}
       </div>
     );
   }
@@ -37,15 +56,15 @@ export default function CollaboratorPanel({ collaborator }) {
   };
 
   return (
-    <div className="p-5 flex flex-col h-full" data-testid="collaborator-panel">
-      <h2 className="font-display text-lg font-medium mb-4">Collaboratore selezionato</h2>
+    <div className="p-4 flex flex-col h-full" data-testid="collaborator-panel">
+      <h2 className="font-display text-base font-medium mb-4">Collaboratore selezionato</h2>
 
       <div className="flex items-center gap-3 mb-5">
         <Avatar className="w-11 h-11">
-          <AvatarFallback className="bg-secondary text-sm font-semibold">{initials(collaborator.name)}</AvatarFallback>
+          <AvatarFallback className="bg-secondary text-sm font-semibold">{initials(collaborator.role_name)}</AvatarFallback>
         </Avatar>
         <div className="min-w-0">
-          <div className="text-sm font-medium truncate">{collaborator.name}</div>
+          <div className="text-sm font-medium truncate">{collaborator.role_name}</div>
           <SeatStatusBadge {...SEAT_STATUS_META[collaborator.status]} testid="panel-seat-status" />
         </div>
       </div>
