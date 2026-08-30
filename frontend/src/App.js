@@ -8,6 +8,7 @@ import Layout from "@/components/Layout";
 import Login from "@/pages/Login";
 import ChangePassword from "@/pages/ChangePassword";
 import Dashboard from "@/pages/Dashboard";
+import SalaRiunioni from "@/pages/SalaRiunioni";
 import NewGoal from "@/pages/NewGoal";
 import Plans from "@/pages/Plans";
 import PlanDetail from "@/pages/PlanDetail";
@@ -22,7 +23,7 @@ import Budget from "@/pages/Budget";
 import Audit from "@/pages/Audit";
 import Settings from "@/pages/Settings";
 
-function Protected({ children }) {
+function Protected({ children, bare = false }) {
   const { user } = useAuth();
   const location = useLocation();
   if (user === undefined)
@@ -30,7 +31,8 @@ function Protected({ children }) {
   if (user === null) return <Navigate to="/login" replace />;
   if (user.must_change_password && location.pathname !== "/cambia-password")
     return <Navigate to="/cambia-password" replace />;
-  return <Layout>{children}</Layout>;
+  // bare=true: la pagina fornisce la propria chrome (es. Sala Riunioni) e non va avvolta nel Layout generico.
+  return bare ? children : <Layout>{children}</Layout>;
 }
 
 const routes = [
@@ -59,6 +61,7 @@ function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/cambia-password" element={<ChangePassword />} />
+            <Route path="/sala-riunioni" element={<Protected bare><SalaRiunioni /></Protected>} />
             {routes.map(([path, el]) => (
               <Route key={path} path={path} element={<Protected>{el}</Protected>} />
             ))}

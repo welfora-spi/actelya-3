@@ -5,11 +5,12 @@ import { useSystem } from "@/context/SystemContext";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, Target, CheckSquare, PlayCircle, FileText, Bot, Plug,
-  Building2, Users, Wallet, ScrollText, Settings as SettingsIcon, LogOut, ShieldAlert, FlaskConical, Network
+  Building2, Users, Wallet, ScrollText, Settings as SettingsIcon, LogOut, ShieldAlert, FlaskConical, Network, Presentation
 } from "lucide-react";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/sala-riunioni", label: "Sala riunioni", icon: Presentation },
   { to: "/nuovo-obiettivo", label: "Nuovo Obiettivo", icon: Target },
   { to: "/piani", label: "Piani (M2)", icon: Network },
   { to: "/approvazioni", label: "Centro Approvazioni", icon: CheckSquare },
