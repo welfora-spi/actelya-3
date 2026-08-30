@@ -36,6 +36,9 @@ for module in (auth, org, users_mgmt, connections, engine, approvals, settings, 
 from app.m2 import engine as m2_engine
 api_router.include_router(m2_engine.router)
 
+from app.brain import router as brain_router
+api_router.include_router(brain_router.router)
+
 app.include_router(api_router)
 
 app.add_middleware(
