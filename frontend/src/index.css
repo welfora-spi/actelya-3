@@ -1,0 +1,75 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --radius: 0.375rem;
+}
+
+.dark {
+    --background: 240 6% 4%;
+    --foreground: 0 0% 96%;
+    --card: 240 5% 7%;
+    --card-foreground: 0 0% 96%;
+    --popover: 240 6% 6%;
+    --popover-foreground: 0 0% 96%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 6% 6%;
+    --secondary: 240 4% 14%;
+    --secondary-foreground: 0 0% 96%;
+    --muted: 240 4% 12%;
+    --muted-foreground: 240 5% 60%;
+    --accent: 240 4% 14%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 4% 16%;
+    --input: 240 4% 16%;
+    --ring: 0 0% 70%;
+    --chart-1: 43 96% 56%;
+    --chart-2: 142 71% 45%;
+    --chart-3: 217 91% 60%;
+    --chart-4: 0 72% 51%;
+    --chart-5: 262 83% 66%;
+}
+
+* {
+    border-color: hsl(var(--border));
+}
+
+body {
+    margin: 0;
+    font-family: 'IBM Plex Sans', sans-serif;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+    font-family: 'Outfit', sans-serif;
+}
+
+code, .font-mono, .tabular {
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.label-caps {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+}
+
+/* Custom thin scrollbar, no gutter */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(240 4% 20%); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(240 4% 28%); }
+
+.grid-lines {
+    background-image: linear-gradient(hsl(var(--border)/0.4) 1px, transparent 1px),
+        linear-gradient(90deg, hsl(var(--border)/0.4) 1px, transparent 1px);
+    background-size: 32px 32px;
+}

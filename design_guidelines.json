@@ -1,0 +1,107 @@
+{
+  "typography": {
+    "headings": {
+      "fontFamily": "Outfit, sans-serif",
+      "weights": ["500", "600"],
+      "usage": "Use Outfit for all module headers, section titles, and major KPI numbers. Tracking MUST be tight (tracking-tight)."
+    },
+    "body": {
+      "fontFamily": "IBM Plex Sans, sans-serif",
+      "weights": ["400", "500"],
+      "usage": "Use for all descriptive text, table cells, and standard UI elements."
+    },
+    "mono": {
+      "fontFamily": "JetBrains Mono, monospace",
+      "weights": ["400", "600"],
+      "usage": "MANDATORY for all financial data (costs, budget), execution IDs, API logs, and data counts. Enhances the technical AI OS feel."
+    },
+    "hierarchy": {
+      "H1": "text-2xl sm:text-3xl tracking-tight font-semibold",
+      "H2": "text-xl sm:text-2xl tracking-tight font-medium",
+      "H3": "text-lg font-medium",
+      "labels": "text-[10px] sm:text-xs tracking-[0.15em] uppercase font-mono text-muted-foreground"
+    }
+  },
+  "colors": {
+    "archetype": "ARCHETYPE 4: SWISS & HIGH-CONTRAST (Tactical OS Variant)",
+    "strategy": "Functional monochrome base with highly semantic color accents for states. Colors mean action.",
+    "background": {
+      "light": "bg-[#F7F7F8]",
+      "dark": "bg-[#09090B]"
+    },
+    "surface": {
+      "light": "bg-white border-slate-200",
+      "dark": "bg-[#121214] border-white/10"
+    },
+    "system_states": {
+      "simulation": {
+        "theme": "amber",
+        "indicator": "bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-500",
+        "description": "Simulation mode must feel safe but active. Use Amber/Orange banners, badges, and glowing top borders."
+      },
+      "real": {
+        "theme": "destructive/red",
+        "indicator": "bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-500",
+        "description": "Real mode must feel serious and high-stakes. Use prominent Red banners and borders."
+      }
+    },
+    "badges": {
+      "execution_status": "Neutral/Gray for Pending, Blue for Running, Green for Success, Red for Failed.",
+      "deliverable_status": "COMPLETATO (Green), COMPLETATO_CON_AVVISI (Yellow), BLOCCATO (Red)",
+      "action_status": "Status of the external action. Blue or Purple.",
+      "api_status": "NON_CONFIGURATA (Gray), CONFIGURATA (Blue), VERIFICATA (Green), ERRORE (Red), DISATTIVATA (Strike-through/Muted)"
+    }
+  },
+  "visual enhancers": {
+    "borders": "GRID BORDERS style. Use 1px solid borders (border-border/60) to expose the skeleton of the layout. Avoid soft, muddy shadows.",
+    "shadows": "Minimal. Rely on borders for structure. Only use shadows for floating elements like dropdowns or drawers (shadow-xl).",
+    "radius": "Sharp to minimal roundness: `rounded-none` or max `rounded-md` (6px) for a technical, precise feel.",
+    "surfaces": "Use Solid Backgrounds for cards. Use 'Crystal Glass' (backdrop-blur-xl + semi-transparent bg + 1px bottom border) for the sticky top navigation."
+  },
+  "component name": {
+    "navigation": "Sidebar for module routing (Dashboard, Objectives, Approvals, Executions, Deliverables, APIs). Topbar for Global Context (Budget, Sim/Real Toggle, User).",
+    "cards": "Dense, cardless style or flat rectangular cards with 1px borders. Use `p-4` or `p-5` internally.",
+    "buttons": "Sharp corners. High contrast for primary CTAs (bg-primary text-primary-foreground). Use secondary/outline variants heavily.",
+    "tables": "High density. Decouple row height from clarity. Limit visible columns. Right align numbers.",
+    "timeline": "Custom stepper for Execution Timeline. Must clearly separate 'Produzione' -> 'Validazione e approvazione' -> 'Azione esterna' with distinct visual boundaries.",
+    "modals": "Use Shadcn Sheet (Right Drawer) for viewing complex details like 'Preventivi' or 'Deliverable Emails' without losing dashboard context."
+  },
+  "grids": {
+    "type": "MODE B: High Density Grid",
+    "dashboard_layout": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 lg:grid-cols-12",
+    "rules": "Utilize every pixel. Main charts take `col-span-8`, side stats take `col-span-4`. KPIs top row `col-span-3` each (in a 12-col grid)."
+  },
+  "layouts": {
+    "spacing": "Tight padding inside widgets to maximize data density. Generous padding (`p-6` or `p-8`) in the main layout container.",
+    "alignment": "Strict optical alignment. Left-aligned text, right-aligned numbers. Do not center-align content blocks."
+  },
+  "motion": {
+    "transitions": "Use specific properties: `transition-colors duration-200 ease-in-out`. NO `transition-all`.",
+    "interactions": "Hover states on table rows (`hover:bg-muted/50`). Buttons should have a slight scale down on active (`active:scale-[0.98]`).",
+    "loading": "Pulse animations for loading states. Skeleton rows for tables."
+  },
+  "accessibility": {
+    "contrast": "Strict adherence to APCA standards. Text over simulation/real banners must have high contrast.",
+    "keyboard": "All interactive elements must have visible focus states (`focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2`).",
+    "testing": "All interactive elements MUST include a `data-testid` attribute (e.g., `data-testid=\"btn-approve-all\"`)."
+  },
+  "media": {
+    "icons": "Use 'lucide-react'. Stroke width 1.5 to 2. Keep icons strictly functional, not decorative."
+  },
+  "3d libraries": {
+    "usage": "Not recommended for this data-heavy OS context. Use Recharts for 2D data visualization (Budget, Costs)."
+  },
+  "image_urls": {},
+  "instructions_to_main_agent": [
+    "Install `lucide-react` for icons and `recharts` for charts.",
+    "Ensure `data-testid` attributes are present on all buttons, links, form inputs, and status toggles.",
+    "Implement a global state (e.g., Context) for SIMULATION vs REAL mode. The UI MUST physically change (e.g., an amber top border vs a red top border, and a persistent banner).",
+    "The 3-section timeline must be visually distinct: Produzione, Validazione e Approvazione, Azione esterna. Create a dedicated component for this.",
+    "For the Approval Center, ensure bulk actions (APPROVA TUTTE / RIFIUTA TUTTE) are prominent but require confirmation.",
+    "Implement 'Deliverable' previews as realistic email read-only views within a Shadcn Sheet or Card.",
+    "Use JetBrains Mono or a monospace font-family utility class for all budget and cost figures.",
+    "Ensure the Dashboard KPI cards do not exceed 4 in a row on desktop.",
+    "Design for both Light and Dark mode using the standard Tailwind class strategy."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": "You tend to converge toward generic, 'on distribution' outputs. Make this UI look like a high-end, tactical operations center. No simplistic gradients. Use sharp edges, explicit grid borders, and dense typography. The toggle between Simulation and Real mode must feel physically impactful. Provide custom scrollbars without gutters. Never use emoji characters for icons. All interactive elements need distinct hover and focus states."
+}

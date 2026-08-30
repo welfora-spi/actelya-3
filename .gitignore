@@ -1,0 +1,63 @@
+# ===== Secrets & environment (NEVER COMMIT) =====
+.env
+*.env
+!.env.example
+**/.env
+backend/.env
+frontend/.env
+*.key
+*.pem
+*.p12
+secrets/
+*.crt
+
+# ===== Local dev credentials / notes (contain demo passwords) =====
+memory/test_credentials.md
+auth_testing.md
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# ===== Node / React =====
+node_modules/
+/frontend/build/
+/frontend/.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+
+# ===== MongoDB dumps / data =====
+*.bson
+*.dump
+dump/
+mongo-dump/
+data/db/
+
+# ===== Test artifacts =====
+test_reports/
+/app/test_reports/
+coverage/
+.coverage
+
+# ===== Editor / OS =====
+.DS_Store
+.idea/
+.vscode/
+*.log
+*.tmp
+
+# ===== Cookies / tokens captured during testing =====
+cookies.txt
+*.cookie
+.env.*
+credentials.json
+.credentials
+frontend/node_modules/.cache/default-development/0.pack
