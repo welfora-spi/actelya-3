@@ -1,8 +1,7 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useSystem } from "@/context/SystemContext";
-import { FlaskConical } from "lucide-react";
 
 export default function Login() {
   const { login, formatApiError } = useAuth();
@@ -32,13 +31,9 @@ export default function Login() {
       <div className="relative w-full max-w-sm mx-4 bg-card border border-border/60 rounded-sm p-8">
         <div className="flex items-center gap-2 mb-1">
           <div className="w-7 h-7 rounded-sm bg-primary text-primary-foreground grid place-items-center font-display font-bold">A</div>
-          <span className="font-display font-semibold tracking-tight text-xl">ACTELYA 2</span>
+          <span className="font-display font-semibold tracking-tight text-xl">ACTELYA 3</span>
         </div>
         <p className="text-sm text-muted-foreground mb-6">Sistema operativo AI per marketing e vendite.</p>
-
-        <div className="flex items-center gap-2 rounded-sm border border-amber-500/30 bg-amber-500/10 text-amber-500 px-3 py-1.5 text-xs font-mono mb-6">
-          <FlaskConical className="w-4 h-4" /> MODALITÀ SIMULAZIONE
-        </div>
 
         <form onSubmit={submit} className="space-y-4">
           <div>
@@ -65,6 +60,9 @@ export default function Login() {
           >
             {loading ? "Accesso…" : "Accedi"}
           </button>
+          <p className="text-xs text-muted-foreground text-center">
+            Prima volta? <Link to="/registrati" className="text-primary hover:underline">Registra la tua azienda</Link>
+          </p>
         </form>
       </div>
     </div>

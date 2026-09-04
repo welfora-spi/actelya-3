@@ -44,6 +44,12 @@ from dataclasses import dataclass, field
 EXECUTION_MODE_M2 = "M2"
 EXECUTION_MODE_SIMULATION = "BRAIN_SIMULATION"
 EXECUTION_MODE_UNAVAILABLE = "UNAVAILABLE"
+# "REAL": capability eseguita FUORI da M2 (che resta dichiaratamente solo-
+# simulazione) tramite un dominio dedicato che parla per davvero con un
+# gateway esterno, sempre dietro conferma esplicita (vedi domains/reel.py:
+# Requesty per testo/storyboard, Runway per video). brain/service.py la
+# instrada SENZA passare da m2.engine.create_plan.
+EXECUTION_MODE_REAL = "REAL"
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,13 @@ class AgentMapping:
     deliverable_type: str | None = None   # tipo di deliverable M2 prodotto, se esiste
     implementation_note: str = ""         # spiegazione, obbligatoria se non "M2"
     notes: str = ""
+    # ---- Specializzazione (separazione Agent/Capability/Skill/Provider,
+    # vedi brain/skills.py per il dettaglio di ciascuna skill referenziata) ----
+    mission: str = ""                          # responsabilita' dell'agente in una frase
+    skills: tuple[str, ...] = ()                # skill_id di brain/skills.py posseduti da questo agente
+    data_accessible: tuple[str, ...] = ()       # campi Fact Ledger/profilo consultabili
+    quality_criteria: tuple[str, ...] = ()      # cosa rende il risultato accettabile
+    excluded_when: tuple[str, ...] = ()         # condizioni per cui l'agente NON va selezionato
 
 
 # Ordine deterministico: definisce anche l'ordine stabile con cui
@@ -69,17 +82,32 @@ AGENT_MAPPINGS: tuple[AgentMapping, ...] = (
         "strategy", "marketing_strategist", "resp-marketing", "Responsabile marketing",
         "Strategia, posizionamento, priorità tra canali di attrazione.", True,
         execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="marketing_strategy",
+        mission="Definire segmenti, value proposition e canali prioritari prima che chiunque altro produca contenuto.",
+        skills=("marketing_strategy_m2",),
+        data_accessible=("ragione_sociale", "settore", "obiettivi_commerciali", "sito_web"),
+        quality_criteria=("almeno 2 segmenti target distinti", "value proposition riconducibile al settore dichiarato"),
+        excluded_when=("la richiesta e' di sola analisi/lettura di risultati esistenti (capability 'analytics')",),
     ),
     AgentMapping(
         "editorial", "content_social", "social-media-manager", "Social media manager",
         "Piano editoriale, calendario contenuti organici.", True,
         execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="editorial_plan",
+        mission="Trasformare la strategia in un calendario editoriale concreto (pilastri, cadenza, canali).",
+        skills=("editorial_plan_m2",),
+        data_accessible=("ragione_sociale", "settore", "canali dichiarati nell'obiettivo"),
+        quality_criteria=("almeno 3 voci di calendario", "almeno 2 pilastri di contenuto"),
+        excluded_when=("la richiesta e' un singolo post/reel isolato, non un piano ricorrente",),
     ),
     AgentMapping(
         "social", "content_social", "copywriter", "Copywriter",
         "Scrittura dei singoli post/contenuti social.", True,
         execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="social_content",
         notes="Stesso agente M2 di 'editorial' (content_social): capability diversa, ruolo frontend diverso.",
+        mission="Scrivere hook, corpo e CTA di post pronti alla pubblicazione (bozza, mai inviata).",
+        skills=("social_content_m2",),
+        data_accessible=("ragione_sociale", "settore", "canali dichiarati nell'obiettivo"),
+        quality_criteria=("almeno 2 post", "hashtag pertinenti, nessun placeholder non dichiarato"),
+        excluded_when=("la richiesta chiede esplicitamente un reel/video (capability 'video_reel', mai sovrapposta a 'social')",),
     ),
     AgentMapping(
         "email", "content_social", "copywriter", "Copywriter",
@@ -87,21 +115,39 @@ AGENT_MAPPINGS: tuple[AgentMapping, ...] = (
         execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="email",
         notes="Capability 'email' assegnata a content_social in M2; lato frontend mappata su Copywriter "
               "(stesso ruolo di 'social').",
+        mission="Scrivere oggetto, proposta e corpo di un'email pronta alla revisione (bozza, mai inviata).",
+        skills=("email_copy_m2",),
+        data_accessible=("ragione_sociale", "settore"),
+        quality_criteria=("oggetto/CTA non vuoti", "nessun destinatario reale, nessuna PII"),
     ),
     AgentMapping(
         "ads", "advertising", "resp-advertising", "Specialista advertising",
         "Bozza di campagna pubblicitaria (mai pubblicata).", True,
         execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="ad_campaign_draft",
+        mission="Preparare varianti di annuncio e audience in bozza, sempre status=DRAFT, mai pubblicata.",
+        skills=("ad_campaign_draft_m2",),
+        data_accessible=("ragione_sociale", "settore", "obiettivi_commerciali"),
+        quality_criteria=("almeno 2 varianti annuncio", "audience descritta senza PII"),
+        excluded_when=("la richiesta e' di soli contenuti organici, nessun budget/campagna a pagamento menzionato",),
     ),
     AgentMapping(
         "leadgen", "lead_gen_sdr", "lead-gen-specialist", "Lead generation specialist",
         "Criteri e piano di lead generation (nessun contatto reale).", True,
         execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="lead_gen_plan",
+        mission="Definire ICP, criteri di targeting e sequenza di outreach in bozza — nessun contatto reale.",
+        skills=("lead_gen_plan_m2",),
+        data_accessible=("ragione_sociale", "settore", "obiettivi_commerciali"),
+        quality_criteria=("almeno 3 criteri di targeting", "nessuna PII/contatto reale nel piano"),
     ),
     AgentMapping(
         "analytics", "analytics_performance", "analista-performance", "Analista performance",
         "Report KPI, lettura/valutazione di risultati e performance esistenti.", True,
         execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="kpi_report",
+        mission="Riportare indicatori con target e valore dichiarato SIMULATO o NON_DISPONIBILE — mai un dato reale inventato.",
+        skills=("kpi_report_m2",),
+        data_accessible=("ragione_sociale", "settore"),
+        quality_criteria=("almeno 3 KPI", "'source' sempre SIMULATO o NON_DISPONIBILE, mai un valore reale non verificato"),
+        excluded_when=("la richiesta e' di creare/lanciare qualcosa di nuovo, non di leggere risultati esistenti",),
     ),
     AgentMapping(
         "review_compliance", "compliance_reviewer", "resp-compliance", "Responsabile compliance",
@@ -112,6 +158,68 @@ AGENT_MAPPINGS: tuple[AgentMapping, ...] = (
         notes="In M2 la revisione compliance è già eseguita automaticamente su ogni deliverable "
               "(m2/reviews.py, invariato). Qui selezionabile esplicitamente quando si produce "
               "contenuto rivolto al pubblico, per mostrarlo come collaboratore attivo in sala riunioni.",
+        mission="Segnalare rischi di conformita' (GDPR, consenso, claim non supportati) su ogni deliverable pubblico.",
+        skills=("compliance_review_m2",),
+        data_accessible=("tutti i deliverable del piano corrente",),
+        quality_criteria=("nessun deliverable rivolto al pubblico resta privo di revisione",),
+    ),
+    AgentMapping(
+        "video_reel", "reel_video_creator", "video-creator", "Video creator (Reel)",
+        "Reel/video verticale per Instagram/TikTok: concept, hook, sceneggiatura, storyboard, "
+        "voice-over, caption, CTA via Requesty; video reale via Runway.", True,
+        execution_ready=True, execution_mode=EXECUTION_MODE_REAL, deliverable_type="video_reel_project",
+        implementation_note="Non e' un agente M2 operativo in senso stretto (nessun producer deterministico "
+                             "in m2/deliverables.py): il piano M2 include comunque un task 'video_reel_project' "
+                             "collegato a un progetto reale in domains/reel.py, generato davvero via Requesty "
+                             "(testo) e Runway (video), sempre con conferma esplicita per ogni chiamata a "
+                             "pagamento (mai automatica). 'm2_agent_id' qui e' solo un'etichetta descrittiva, "
+                             "non una voce di m2/agents_registry.py::AGENT_CONTRACTS.",
+        notes="Il task entra nello STESSO piano/DAG M2 delle altre capability (brain/service.py): un solo "
+              "piano, mai un secondo percorso separato. Ruolo DISTINTO dal Creative/Graphic Designer "
+              "(capability 'flyer_image'): il Video creator copre storyboard audiovisivo/montaggio/video, "
+              "non layout statici.",
+        mission="Ideare e produrre contenuto video reale: sceneggiatura e storyboard via Requesty, "
+                "clip video via Runway, sempre grounded sul Fact Ledger, mai un'affermazione inventata.",
+        skills=("reel_text_requesty", "reel_video_runway", "voice_over_tts"),
+        data_accessible=("ragione_sociale", "settore", "sito_web", "obiettivi_commerciali", "prodotto",
+                         "pubblico_target", "tono_di_voce"),
+        quality_criteria=("nessuna affermazione su prodotto/pubblico/prezzo/territorio estranea al Fact Ledger "
+                          "o al brief (domains/reel_semantic.py)", "video dichiarato pronto SOLO con un URL "
+                          "realmente riproducibile"),
+        excluded_when=("il Fact Ledger non ha ragione_sociale/settore (si chiede prima quello, mai un contenuto generico spacciato per specifico)",),
+    ),
+    AgentMapping(
+        "flyer_image", "flyer_creative_designer", "creative-designer", "Creative/Graphic Designer",
+        "Flyer/immagine promozionale: copy, layout concettuale, prompt immagine, generazione reale via Requesty.",
+        True, execution_ready=True, execution_mode=EXECUTION_MODE_REAL, deliverable_type="flyer_project",
+        implementation_note="Non e' un agente M2 operativo in senso stretto: il piano M2 include un task "
+                             "'flyer_project' collegato a un progetto reale in domains/flyer.py, generato "
+                             "davvero via Requesty (testo E immagine, confermato su docs.requesty.ai -- "
+                             "POST /v1/images/generations), sempre con conferma esplicita.",
+        notes="Ruolo DISTINTO dal Video creator: stesso pattern (obiettivo -> grounding -> skill -> "
+              "provider -> validazione -> approvazione), capability e deliverable diversi (statico vs "
+              "audiovisivo). Il task entra nello STESSO piano/DAG M2 delle altre capability.",
+        mission="Comporre il messaggio (headline, sottotitolo, CTA) e il prompt visivo di un flyer promozionale, "
+                "generare l'immagine reale, sempre grounded sul Fact Ledger, mai un'affermazione inventata.",
+        skills=("flyer_image_generation",),
+        data_accessible=("ragione_sociale", "settore", "sito_web", "obiettivi_commerciali", "prodotto",
+                         "pubblico_target", "tono_di_voce"),
+        quality_criteria=("nessuna affermazione su prodotto/pubblico/prezzo/territorio estranea al Fact "
+                          "Ledger o al brief (domains/reel_semantic.py)", "immagine dichiarata pronta SOLO "
+                          "con un URL realmente generato da Requesty"),
+        excluded_when=("il Fact Ledger non ha ragione_sociale/settore",),
+    ),
+    AgentMapping(
+        "audio_voiceover", "reel_video_creator", "video-creator", "Video creator (Reel)",
+        "Voice-over/audio promozionale.", True,
+        execution_ready=True, execution_mode=EXECUTION_MODE_REAL, deliverable_type=None,
+        implementation_note="PREDISPOSTA: nessun provider TTS verificato oggi (brain/skills.py -> "
+                             "voice_over_tts, sempre NOT_CONFIGURED). Lo script del voice-over resta "
+                             "comunque disponibile in testo (prodotto dalla skill 'reel_text_requesty').",
+        notes="Stesso agente/ruolo di 'video_reel' (Video/Creative specialist unico).",
+        mission="Predisporre lo script del voice-over; la sintesi audio resta NOT_CONFIGURED.",
+        skills=("voice_over_tts",),
+        data_accessible=("ragione_sociale", "settore"),
     ),
     AgentMapping(
         "appointments", "appointment_setter", "appointment-setter", "Appointment setter",
@@ -123,6 +231,7 @@ AGENT_MAPPINGS: tuple[AgentMapping, ...] = (
                              "entrambi privi di una voce 'appointments'). PREDISPOSTO in M2 "
                              "(agents_registry.py, operative=False): non eseguibile, né realmente né "
                              "in simulazione, in questa fase.",
+        mission="PREDISPOSTO: fissare appuntamenti (nessuna implementazione oggi).",
     ),
     AgentMapping(
         "nurturing", "nurturing", "specialista-nurturing", "Specialista nurturing",
@@ -130,6 +239,7 @@ AGENT_MAPPINGS: tuple[AgentMapping, ...] = (
         execution_ready=False, execution_mode=EXECUTION_MODE_UNAVAILABLE, deliverable_type=None,
         implementation_note="Stesso limite di 'appointments': nessun deliverable_type M2 e nessun "
                              "producer di simulazione nel brain per questa capability oggi.",
+        mission="PREDISPOSTO: sequenze di nurturing (nessuna implementazione oggi).",
     ),
 )
 

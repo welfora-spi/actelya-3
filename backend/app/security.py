@@ -71,6 +71,13 @@ def decrypt_secret(ciphertext: str) -> str:
         raise SecretVaultError("Impossibile decifrare il segreto con la master key corrente.")
 
 
+def set_auth_cookies(response, access: str, refresh: str) -> None:
+    response.set_cookie("access_token", access, httponly=True, secure=True,
+                        samesite="none", max_age=ACCESS_TOKEN_MINUTES * 60, path="/")
+    response.set_cookie("refresh_token", refresh, httponly=True, secure=True,
+                        samesite="none", max_age=REFRESH_TOKEN_DAYS * 86400, path="/")
+
+
 def mask_secret(plaintext: str) -> str:
     if not plaintext:
         return ""

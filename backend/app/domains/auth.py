@@ -6,7 +6,7 @@ from bson import ObjectId
 from ..db import db
 from ..config import FRONTEND_URL, ACCESS_TOKEN_MINUTES, REFRESH_TOKEN_DAYS, DEFAULT_ORG_ID
 from ..security import (hash_password, verify_password, create_access_token,
-                        create_refresh_token, decode_token)
+                        create_refresh_token, decode_token, set_auth_cookies)
 from ..deps import get_current_user, rate_limit
 from ..audit import log_audit
 from ..models import now_iso
@@ -27,13 +27,6 @@ class ChangePasswordBody(BaseModel):
     new_password: str = Field(min_length=8)
 
 
-def _set_cookies(response: Response, access: str, refresh: str):
-    response.set_cookie("access_token", access, httponly=True, secure=True,
-                        samesite="none", max_age=ACCESS_TOKEN_MINUTES * 60, path="/")
-    response.set_cookie("refresh_token", refresh, httponly=True, secure=True,
-                        samesite="none", max_age=REFRESH_TOKEN_DAYS * 86400, path="/")
-
-
 def _public_user(u: dict) -> dict:
     return {
         "id": str(u.get("_id") or u.get("id")),
@@ -52,7 +45,7 @@ def _public_user(u: dict) -> dict:
 async def login(body: LoginBody, request: Request, response: Response):
     ip = request.client.host if request.client else "unknown"
     email = body.email.lower().strip()
-    rate_limit(f"login:{ip}", max_calls=10, window_seconds=60)
+    rate_limit(f"login:{ip}", max_calls=30, window_seconds=60)
 
     key = f"{ip}:{email}"
     attempt = await db.login_attempts.find_one({"identifier": key})
@@ -78,7 +71,7 @@ async def login(body: LoginBody, request: Request, response: Response):
     uid = str(user["_id"])
     access = create_access_token(uid, user["email"], user["role"])
     refresh = create_refresh_token(uid)
-    _set_cookies(response, access, refresh)
+    set_auth_cookies(response, access, refresh)
     await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_login": now_iso()}})
     user["last_login"] = now_iso()
     await log_audit(org_id=user.get("organization_id", DEFAULT_ORG_ID), user=user,

@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 
 from ...domains.intent import classify_intent
 from ..agents.agent_map import (
-    EXECUTION_MODE_M2,
     EXECUTION_MODE_SIMULATION,
     EXECUTION_MODE_UNAVAILABLE,
     agent_groups,
@@ -36,6 +35,48 @@ _LEADGEN_KW = [r"lead generation", r"lead gen\b", r"trova client", r"potenziali 
 _APPOINTMENT_KW = [r"appuntament", r"prenotazion", r"fissare una call", r"ottenere appuntamenti"]
 _NURTURING_KW = [r"\bnurturing\b", r"follow-up dei lead", r"coltivare i lead", r"mantenere il contatto con i lead"]
 _ANALYTICS_KW = [r"\bkpi\b", r"\bperformance\b", r"risultati della campagna", r"analizza", r"analisi dei risultati", r"\breport\b"]
+# Distinta da 'social' (post statici): richiede un segnale esplicito di
+# VIDEO/reel, mai il solo canale ("Instagram" da solo resta 'social' -- vedi
+# _SOCIAL_KW) per non far collidere le due capability su una richiesta di
+# semplici post.
+_VIDEO_REEL_KW = [
+    r"\breel\b", r"\bvideo\s+verticale\b", r"\bvideo\s+promozional\w*\b", r"\btiktok\b",
+    r"video\s+per\s+(?:instagram|tiktok|social)", r"crea(?:re)?\s+un\s+video", r"genera(?:re)?\s+un\s+video",
+    r"\bvideo\s+reel\b",
+]
+# Predisposta (skills.py::flyer_image_generation e' sempre NOT_CONFIGURED
+# oggi, nessun provider immagine verificato): il Brain la rileva comunque,
+# non nasconde la richiesta, prepara copy/prompt testuale e segnala
+# esplicitamente il blocco solo sull'immagine (vedi service.py).
+_FLYER_IMAGE_KW = [
+    r"\bflyer\b", r"\bvolantino\b", r"\bmanifesto\b", r"\blocandina\b", r"immagine promozionale",
+    r"\bbanner\b", r"post con immagine", r"foto promozionale", r"immagine per il post",
+]
+_AUDIO_VOICEOVER_KW = [r"\bvoice[\s-]?over\b", r"\bvoce fuori campo\b", r"\btts\b", r"sintesi vocale", r"\baudio promozionale\b"]
+
+# Intento promozionale/di comunicazione generico, SENZA alcun segnale di
+# formato (ne' reel/video ne' flyer/immagine): frasi reali come "voglio
+# pubblicizzare le focaccine", "pubblicizziamo il nuovo prodotto",
+# "promuovi questa offerta", "vorrei portare più gente al locale", "devo
+# far sapere ai clienti che domenica siamo aperti". Prima di questa
+# correzione queste frasi non attivavano ALCUNA capability (nessuna parola
+# "social"/"post"/"reel"/"flyer") e ricadevano nel messaggio di chiarimento
+# generico ("che tipo di risultato desideri: strategia, ... report?"), non
+# pertinente per una richiesta chiaramente di marketing/contenuto. Vedi
+# _formato_contenuto_ambiguo(): quando presente, senza un formato esplicito,
+# si chiede UNA sola domanda mirata (Reel o immagine?) invece del messaggio
+# generico o — peggio — di procedere in silenzio con un contenuto simulato
+# (capability 'social', oggi solo BRAIN_SIMULATION/M2, non un provider
+# reale) quando l'utente si aspetta un vero output multimediale.
+_PROMOTIONAL_INTENT_KW = [
+    r"pubblicizz\w*", r"promuov\w*", r"far\s+conoscere", r"far\s+sapere",
+    r"portare\s+(?:più|piu)\s+(?:gente|persone|client\w*)",
+    r"comunicare\s+(?:ai\s+)?client\w*", r"farmi\s+conoscere",
+]
+# Le "storie" (Instagram/Facebook Stories) possono essere foto O video brevi:
+# formato intrinsecamente ambiguo tra i due formati REALI disponibili oggi
+# (video_reel/flyer_image), mai assegnato automaticamente all'uno o all'altro.
+_STORY_KW = [r"\bstoria\b", r"\bstorie\b", r"\bstories\b"]
 
 _ANALYSIS_ONLY_VERBS = [r"\banalizza\b", r"\bvaluta\b", r"\bmisura\b", r"controlla i risultati", r"leggi i risultati", r"leggi le performance"]
 _CREATION_VERBS = [r"\bcrea\b", r"\bprepara\b", r"\bscrivi\b", r"\bgenera\b", r"\blancia\b", r"\bavvia\b", r"\bsviluppa\b", r"\bcostruisci\b", r"\bprogetta\b", r"\bredigi\b"]
@@ -54,8 +95,14 @@ _RISK_DENYLIST_KW = [
 # Capability il cui contenuto è rivolto al pubblico: quando almeno una è
 # selezionata, la revisione compliance viene convocata di conseguenza
 # (in M2 è comunque sempre eseguita su ogni deliverable — qui la rendiamo
-# visibile come collaboratore attivo solo quando pertinente).
-_CONTENT_FACING_CAPABILITIES = {"editorial", "social", "ads", "email"}
+# visibile come collaboratore attivo solo quando pertinente). Include anche
+# le capability REALI multimodali (flyer_image/video_reel/audio_voiceover):
+# producono contenuto pubblico esattamente come editorial/social/ads/email,
+# quindi la Compliance va convocata anche per una richiesta di solo flyer o
+# solo reel (mai solo per i formati testuali nativi di M2).
+_CONTENT_FACING_CAPABILITIES = {
+    "editorial", "social", "ads", "email", "flyer_image", "video_reel", "audio_voiceover",
+}
 
 STATUS_READY = "READY"
 STATUS_NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION"
@@ -69,6 +116,22 @@ def _normalizza(testo: str) -> str:
 
 def _match_any(testo: str, patterns: list[str]) -> bool:
     return any(re.search(p, testo, re.IGNORECASE) for p in patterns)
+
+
+def _formato_contenuto_ambiguo(testo: str, capabilities: list[str]) -> bool:
+    """True SOLO quando NESSUNA capability e' stata rilevata (altrimenti il
+    percorso gia' consolidato/testato per quella capability resta invariato
+    -- 'social'/'editorial' rilevati da parole esplicite tipo 'post'/
+    'Instagram' restano READY come sempre, mai deviati qui) MA il testo
+    esprime comunque chiaramente un intento di contenuto/promozione (vedi
+    _PROMOTIONAL_INTENT_KW/_STORY_KW sopra): in quel caso select_agents()
+    chiede UNA sola domanda mirata sul formato (Reel o immagine?) invece del
+    messaggio di chiarimento generico (che elenca strategia/lead gen/report,
+    non pertinenti per una richiesta chiaramente di marketing/comunicazione,
+    solo priva di un formato riconoscibile)."""
+    if capabilities:
+        return False
+    return _match_any(testo, _PROMOTIONAL_INTENT_KW) or _match_any(testo, _STORY_KW)
 
 
 def detect_capabilities(goal_text: str) -> list[str]:
@@ -91,8 +154,21 @@ def detect_capabilities(goal_text: str) -> list[str]:
         trovate.append("strategy")
     if _match_any(testo, _EDITORIAL_KW):
         trovate.append("editorial")
-    if _match_any(testo, _SOCIAL_KW):
+    video_reel = _match_any(testo, _VIDEO_REEL_KW)
+    if video_reel:
+        trovate.append("video_reel")
+    elif _match_any(testo, _SOCIAL_KW):
+        # 'social' (post statici) e 'video_reel' non si sommano sulla stessa
+        # richiesta: un segnale esplicito di reel/video sostituisce il
+        # generico "post/Instagram", non lo affianca (il copywriter M2 resta
+        # comunque selezionabile insieme al video-creator se la richiesta
+        # menziona anche 'post' in un'altra frase -- questa esclusione vale
+        # solo entro lo stesso match di frase).
         trovate.append("social")
+    if _match_any(testo, _FLYER_IMAGE_KW):
+        trovate.append("flyer_image")
+    if _match_any(testo, _AUDIO_VOICEOVER_KW):
+        trovate.append("audio_voiceover")
     if _match_any(testo, _EMAIL_KW):
         trovate.append("email")
     if _match_any(testo, _ADS_KW):
@@ -214,6 +290,28 @@ def select_agents(goal_text: str) -> SelectionResult:
 
     capabilities = detect_capabilities(goal_text)
 
+    # 2.5) Intento di contenuto/promozione riconosciuto ma formato REALE non
+    #    specificato (né reel/video né flyer/immagine): si chiede SOLO il
+    #    formato, mai in silenzio la capability 'social' (oggi solo
+    #    simulata) e mai il messaggio generico del punto 3 sotto, che elenca
+    #    opzioni (strategia/lead gen/report) irrilevanti per una richiesta
+    #    chiaramente di marketing/comunicazione. Le due opzioni offerte
+    #    ("Reel"/"immagine") sono scelte apposta per essere ri-riconosciute
+    #    verbatim da _VIDEO_REEL_KW/_FLYER_IMAGE_KW quando l'utente le
+    #    ripete nella risposta (stesso pattern di riconoscimento del resto
+    #    del modulo, nessuna logica di re-injection speciale necessaria).
+    if _formato_contenuto_ambiguo(normalized.lower(), capabilities):
+        return _esito_non_pronto(
+            STATUS_NEEDS_CLARIFICATION, normalized_goal=normalized,
+            detected_intents=capabilities,
+            missing_information=["formato_contenuto"],
+            clarifying_questions=[
+                "Perfetto: preferisci un Reel (breve video verticale per Instagram/TikTok) o un post "
+                "con immagine (flyer/immagine promozionale)? Dimmelo e continuo subito con lo stesso obiettivo.",
+            ],
+            risk_flags=risk_flags,
+        )
+
     # 3) Nessuna capability riconosciuta ma nessun segnale "fuori dominio":
     #    richiesta genuinamente vaga/ambigua all'interno del nostro dominio.
     if not capabilities:
@@ -221,8 +319,8 @@ def select_agents(goal_text: str) -> SelectionResult:
             STATUS_NEEDS_CLARIFICATION, normalized_goal=normalized,
             missing_information=["tipo_di_deliverable"],
             clarifying_questions=[
-                "Che tipo di risultato desideri (strategia, contenuti social, campagna pubblicitaria, "
-                "lead generation, report)?",
+                "Che tipo di risultato desideri (un Reel, un post con immagine, un piano editoriale, una "
+                "campagna pubblicitaria, lead generation, un report)?",
             ],
             risk_flags=risk_flags,
         )

@@ -1,31 +1,12 @@
 """ACTELYA 2 backend regression tests - Milestone 1 SIMULAZIONE"""
 import os
 import time
+import uuid
 import pytest
 import requests
 from pymongo import MongoClient
 
-with open("/app/frontend/.env") as f:
-    for ln in f:
-        if ln.startswith("REACT_APP_BACKEND_URL="):
-            BASE = ln.split("=", 1)[1].strip().rstrip("/")
-
-def _read_env_file(path, key, default=""):
-    try:
-        with open(path) as f:
-            for ln in f:
-                if ln.startswith(key + "="):
-                    return ln.split("=", 1)[1].strip().strip('"').rstrip("/")
-    except Exception:
-        pass
-    return default
-
-
-# Credentials come from environment / gitignored .env — never hardcode secrets in the repo.
-ADMIN_EMAIL = _read_env_file("/app/backend/.env", "ADMIN_EMAIL", "admin@example.com")
-# ADMIN_TEST_PASSWORD = current durable admin password; ADMIN_SEED_PASSWORD = seed password (must be inert).
-ADMIN_PASS = os.environ.get("ADMIN_TEST_PASSWORD", "")
-SEED_PASS = os.environ.get("ADMIN_SEED_PASSWORD", "")
+from conftest import BASE_URL as BASE, ADMIN_EMAIL, ADMIN_TEST_PASSWORD as ADMIN_PASS, ADMIN_SEED_PASSWORD as SEED_PASS
 
 
 def _clear_lockout():
@@ -65,15 +46,40 @@ def test_bad_login():
     r = requests.post(f"{BASE}/api/auth/login",
                       json={"email": "nonexistent_test_xyz@example.com", "password": "wrong"})
 
-def test_seed_password_no_longer_works():
-    """Idempotent seed: env ADMIN_PASSWORD must NOT overwrite the user-changed password."""
+def test_seed_password_no_longer_works(client):
+    """Idempotent seed: env ADMIN_PASSWORD must NOT overwrite a user-changed
+    password. AUTOCONTENUTO (item 23, DECISIONE UFFICIALE "100% REALE"):
+    la versione precedente assumeva che la password admin del server live
+    fosse gia' stata cambiata da un'azione esterna a questo test file (vera
+    solo se un riavvio precedente con FORCE_RESET_ADMIN non l'aveva
+    resettata nel frattempo) -- un presupposto ambientale non garantito,
+    che rendeva il test fragile e dipendente dallo stato residuo di sessioni
+    precedenti. Ora il test PRODUCE da solo la precondizione (cambia
+    davvero la password), verifica l'idempotenza del seed, e ripristina la
+    password originale alla fine (altri test di questo file assumono
+    ADMIN_TEST_PASSWORD valida)."""
     _clear_lockout()
-    r = requests.post(f"{BASE}/api/auth/login",
-                      json={"email": ADMIN_EMAIL, "password": SEED_PASS})
-    assert r.status_code == 401, f"Seed password still works! seed idempotence broken: {r.status_code}"
+    temp_password = f"TempTest!{uuid.uuid4().hex[:12]}"
 
+    r = client.post(f"{BASE}/api/auth/change-password",
+                    json={"current_password": ADMIN_PASS, "new_password": temp_password})
+    assert r.status_code == 200, r.text
 
-    assert r.status_code in (401, 429)
+    try:
+        _clear_lockout()
+        r = requests.post(f"{BASE}/api/auth/login", json={"email": ADMIN_EMAIL, "password": SEED_PASS})
+        assert r.status_code == 401, f"Seed password still works after a real password change! seed idempotence broken: {r.status_code}"
+    finally:
+        # Ripristina la password originale: il resto della suite (e chiunque
+        # altro usi questo ambiente) si aspetta ADMIN_TEST_PASSWORD valida.
+        _clear_lockout()
+        r_login_temp = requests.post(f"{BASE}/api/auth/login", json={"email": ADMIN_EMAIL, "password": temp_password})
+        assert r_login_temp.status_code == 200, "Impossibile ripristinare la password admin dopo il test: credenziale temporanea non valida."
+        tok = r_login_temp.json()["access_token"]
+        r_restore = requests.post(f"{BASE}/api/auth/change-password",
+                                  headers={"Authorization": f"Bearer {tok}"},
+                                  json={"current_password": temp_password, "new_password": ADMIN_PASS})
+        assert r_restore.status_code == 200, "Impossibile ripristinare la password admin originale dopo il test."
 
 
 # ---------- Full flow PRODUZIONE ----------

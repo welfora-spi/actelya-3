@@ -5,7 +5,7 @@ from bson import ObjectId
 import json
 
 from ..db import db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, require_roles, assert_same_org
 from ..audit import log_audit
 from ..security import hash_password
 from ..models import now_iso
@@ -48,12 +48,14 @@ def _public(u: dict) -> dict:
 
 @router.get("")
 async def list_users(user: dict = Depends(get_current_user)):
-    users = await db.users.find({"organization_id": DEFAULT_ORG_ID}).to_list(500)
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    users = await db.users.find({"organization_id": org_id}).to_list(500)
     return [_public(u) for u in users]
 
 
 @router.post("")
 async def create_user(body: CreateUserBody, user: dict = Depends(require_roles("ADMIN"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     if body.role not in ROLES:
         raise HTTPException(status_code=400, detail="Ruolo non valido")
     email = body.email.lower().strip()
@@ -64,14 +66,14 @@ async def create_user(body: CreateUserBody, user: dict = Depends(require_roles("
         "role": body.role, "active": body.active,
         "password_hash": hash_password(body.password),
         "must_change_password": True,
-        "organization_id": DEFAULT_ORG_ID,
+        "organization_id": org_id,
         "permissions": [], "notification_prefs": {"email": True, "in_app": True},
         "last_login": None, "created_by": user["id"], "updated_by": user["id"],
         "created_at": now_iso(), "updated_at": now_iso(),
     }
     res = await db.users.insert_one(doc)
     doc["_id"] = res.inserted_id
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="CREATE_USER",
+    await log_audit(org_id=org_id, user=user, action="CREATE_USER",
                     entity_type="user", entity_id=str(res.inserted_id),
                     details={"email": email, "role": body.role})
     return _public(doc)
@@ -79,16 +81,16 @@ async def create_user(body: CreateUserBody, user: dict = Depends(require_roles("
 
 @router.put("/{user_id}")
 async def update_user(user_id: str, body: UpdateUserBody, user: dict = Depends(require_roles("ADMIN"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     target = await db.users.find_one({"_id": ObjectId(user_id)})
-    if not target:
-        raise HTTPException(status_code=404, detail="Utente non trovato")
+    assert_same_org(target, user, "Utente non trovato")
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if "role" in updates and updates["role"] not in ROLES:
         raise HTTPException(status_code=400, detail="Ruolo non valido")
     updates["updated_at"] = now_iso()
     updates["updated_by"] = user["id"]
     await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": updates})
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="UPDATE_USER",
+    await log_audit(org_id=org_id, user=user, action="UPDATE_USER",
                     entity_type="user", entity_id=user_id, details=updates)
     out = await db.users.find_one({"_id": ObjectId(user_id)})
     return _public(out)
@@ -96,10 +98,10 @@ async def update_user(user_id: str, body: UpdateUserBody, user: dict = Depends(r
 
 @router.get("/{user_id}/export")
 async def export_user(user_id: str, user: dict = Depends(require_roles("ADMIN"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     target = await db.users.find_one({"_id": ObjectId(user_id)})
-    if not target:
-        raise HTTPException(status_code=404, detail="Utente non trovato")
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="EXPORT_USER_DATA",
+    assert_same_org(target, user, "Utente non trovato")
+    await log_audit(org_id=org_id, user=user, action="EXPORT_USER_DATA",
                     entity_type="user", entity_id=user_id)
     data = _public(target)
     payload = json.dumps(data, indent=2, ensure_ascii=False)
@@ -109,14 +111,14 @@ async def export_user(user_id: str, user: dict = Depends(require_roles("ADMIN"))
 
 @router.delete("/{user_id}")
 async def delete_user(user_id: str, confirm: bool = False, user: dict = Depends(require_roles("ADMIN"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     if not confirm:
         raise HTTPException(status_code=400, detail="Conferma esplicita richiesta (confirm=true)")
     target = await db.users.find_one({"_id": ObjectId(user_id)})
-    if not target:
-        raise HTTPException(status_code=404, detail="Utente non trovato")
+    assert_same_org(target, user, "Utente non trovato")
     if str(target["_id"]) == user["id"]:
         raise HTTPException(status_code=400, detail="Non puoi eliminare il tuo stesso account")
     await db.users.delete_one({"_id": ObjectId(user_id)})
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="DELETE_USER",
+    await log_audit(org_id=org_id, user=user, action="DELETE_USER",
                     entity_type="user", entity_id=user_id, details={"email": target["email"]})
     return {"ok": True}

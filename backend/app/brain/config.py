@@ -1,7 +1,8 @@
-"""Brain — configurazione centrale di sicurezza (Blocco A).
+"""Brain — configurazione centrale di sicurezza (Blocco A, estesa per il
+Social Media Manager production-ready — DECISIONE UFFICIALE "100% REALE").
 
 Punto UNICO da cui il resto del brain legge se sono ammesse azioni esterne
-reali. In questa fase l'unico stato possibile è quello sicuro:
+reali. Il default resta SEMPRE quello sicuro:
 
     REAL_EXTERNAL_ACTIONS = False
     AI_PROVIDER_MODE      = "mock"
@@ -11,10 +12,18 @@ Regole (garantite dai resolver qui sotto, mai da un valore letto altrove):
 - variabile d'ambiente assente  -> valore sicuro di default;
 - valore vuoto o non riconosciuto -> valore sicuro di default (mai un
   errore che potrebbe essere ignorato, mai un fallback permissivo);
-- per AI_PROVIDER_MODE e CONNECTOR_MODE, in questa fase esiste UN SOLO
-  valore riconosciuto ("mock"/"dry_run"): non c'è alcuna stringa che possa
-  far risolvere la modalità a qualcosa di diverso da quella sicura, perché
-  nessuna modalità reale è ancora implementata da nessuna parte;
+- CONNECTOR_MODE può ora risolvere a "real" — MA solo se la variabile
+  d'ambiente vale ESATTAMENTE "real" (case-insensitive): qualunque altro
+  valore, assente, vuoto o refuso ricade sempre su "dry_run". Anche con
+  CONNECTOR_MODE="real", nessuna azione esterna reale è possibile senza
+  ANCHE REAL_EXTERNAL_ACTIONS=true (vedi gateways/connector_gateway.py,
+  che verifica ENTRAMBI, più l'esistenza di un adapter reale registrato
+  E la configurazione/verifica del connector specifico per l'organizzazione
+  — nessuna delle quattro condizioni da sola è mai sufficiente);
+- AI_PROVIDER_MODE resta 'mock' per costruzione in questa fase (i provider
+  AI reali di ACTELYA 3 — Requesty, Runway — non passano da questo flag:
+  hanno la propria gestione connessione/credenziali per organizzazione in
+  domains/connections.py e domains/video_connections.py);
 - nessuna lettura di credenziali qui, nessuna inizializzazione di provider;
 - nessuna chiamata di rete: questo modulo fa solo `os.environ.get`.
 
@@ -30,9 +39,9 @@ from typing import Mapping, Optional
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off", ""}
 
-# Unico valore ammesso in questa fase: nessuna modalità reale esiste ancora.
 _SAFE_AI_PROVIDER_MODE = "mock"
 _SAFE_CONNECTOR_MODE = "dry_run"
+_REAL_CONNECTOR_MODE = "real"
 
 
 def resolve_real_external_actions(env: Optional[Mapping[str, str]] = None) -> bool:
@@ -65,15 +74,18 @@ def resolve_ai_provider_mode(env: Optional[Mapping[str, str]] = None) -> str:
 
 
 def resolve_connector_mode(env: Optional[Mapping[str, str]] = None) -> str:
-    """'dry_run' per qualunque input diverso dalla stringa 'dry_run' stessa
-    — stessa logica di resolve_ai_provider_mode()."""
+    """'dry_run' per qualunque input diverso da 'real' (assente, vuoto,
+    refuso, o letteralmente 'dry_run'): il default sicuro non richiede
+    alcuna azione da chi configura l'ambiente. 'real' è l'UNICO valore che
+    sblocca la modalità reale — e da solo NON è sufficiente: vedi
+    gateways/connector_gateway.py per le condizioni aggiuntive."""
     source = os.environ if env is None else env
     raw = source.get("CONNECTOR_MODE")
     if raw is None:
         return _SAFE_CONNECTOR_MODE
     normalized = raw.strip().lower()
-    if normalized == _SAFE_CONNECTOR_MODE:
-        return _SAFE_CONNECTOR_MODE
+    if normalized == _REAL_CONNECTOR_MODE:
+        return _REAL_CONNECTOR_MODE
     return _SAFE_CONNECTOR_MODE
 
 

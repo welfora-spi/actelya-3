@@ -7,25 +7,7 @@ import time
 import pytest
 import requests
 
-def _load_base_url():
-    url = os.environ.get("REACT_APP_BACKEND_URL", "").strip()
-    if not url:
-        try:
-            with open("/app/frontend/.env") as f:
-                for line in f:
-                    if line.startswith("REACT_APP_BACKEND_URL="):
-                        url = line.split("=", 1)[1].strip()
-                        break
-        except FileNotFoundError:
-            pass
-    assert url, "REACT_APP_BACKEND_URL non definito"
-    return url.rstrip("/")
-
-BASE_URL = _load_base_url()
-API = f"{BASE_URL}/api"
-
-ADMIN_EMAIL = "raffaelepatarino77@gmail.com"
-ADMIN_PASSWORD = "Actelya2!Milestone"
+from conftest import BASE_URL, API_URL as API, ADMIN_EMAIL, ADMIN_TEST_PASSWORD as ADMIN_PASSWORD
 
 INITIAL_PWD = "TempPass!12345"
 FINAL_PWD = "Actelya!Test2025"

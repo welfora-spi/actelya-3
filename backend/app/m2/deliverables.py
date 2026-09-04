@@ -187,6 +187,38 @@ def validate_kpi_report(c):
     return _finalize(errs, warns)
 
 
+def validate_video_reel_project(c):
+    """Placeholder strutturale per il task M2 'video_reel_project' (Blocco
+    brain/service.py -> capability REALE 'video_reel'): il contenuto vero
+    (sceneggiatura, storyboard, video) vive in domains/reel.py, MAI
+    generato da M2 (che resta dichiaratamente solo-simulazione, vedi
+    m2/engine.py::_assert_simulation). Questo validatore accetta SOLO il
+    riferimento gia' creato da reel.create_project: nessun contenuto reale
+    viene mai validato o prodotto qui."""
+    if not isinstance(c, dict) or not c.get("reel_project_id"):
+        return {"status": "BLOCCATO", "warnings": [], "errors": ["reel_project_id mancante: nessun progetto reel collegato"]}
+    return {
+        "status": "COMPLETATO_CON_AVVISI",
+        "warnings": ["Contenuto reale (testo Requesty + video Runway) gestito nel laboratorio Reel, "
+                     "non generato da M2: apri il progetto per generarlo e approvarlo."],
+        "errors": [],
+    }
+
+
+def validate_flyer_project(c):
+    """Stesso pattern di validate_video_reel_project: placeholder strutturale
+    per il task M2 'flyer_project' (capability REALE 'flyer_image'). Il
+    contenuto vero (copy, prompt immagine, immagine) vive in domains/flyer.py."""
+    if not isinstance(c, dict) or not c.get("flyer_project_id"):
+        return {"status": "BLOCCATO", "warnings": [], "errors": ["flyer_project_id mancante: nessun progetto flyer collegato"]}
+    return {
+        "status": "COMPLETATO_CON_AVVISI",
+        "warnings": ["Contenuto reale (copy + immagine Requesty) gestito nel laboratorio Flyer, "
+                     "non generato da M2: apri il progetto per generarlo e approvarlo."],
+        "errors": [],
+    }
+
+
 VALIDATORS = {
     "marketing_strategy": validate_marketing_strategy,
     "editorial_plan": validate_editorial_plan,
@@ -195,6 +227,8 @@ VALIDATORS = {
     "lead_gen_plan": validate_lead_gen_plan,
     "kpi_report": validate_kpi_report,
     "email": validate_email_deliverable,   # compatibilità Milestone 1
+    "video_reel_project": validate_video_reel_project,
+    "flyer_project": validate_flyer_project,
 }
 
 

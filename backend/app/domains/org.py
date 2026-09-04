@@ -47,25 +47,27 @@ class ProfileBody(BaseModel):
 
 @router.get("/profile")
 async def get_profile(user: dict = Depends(get_current_user)):
-    doc = await db.organizations.find_one({"id": DEFAULT_ORG_ID}, {"_id": 0})
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    doc = await db.organizations.find_one({"id": org_id}, {"_id": 0})
     if not doc:
-        doc = {"id": DEFAULT_ORG_ID, **{f: "" for f in PROFILE_FIELDS}}
+        doc = {"id": org_id, **{f: "" for f in PROFILE_FIELDS}}
     return doc
 
 
 @router.put("/profile")
 async def update_profile(body: ProfileBody, user: dict = Depends(require_roles("ADMIN", "OPERATORE"))):
-    existing = await db.organizations.find_one({"id": DEFAULT_ORG_ID})
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    existing = await db.organizations.find_one({"id": org_id})
     data = body.model_dump()
     if existing:
         touch(existing, user["id"], "Aggiornato profilo aziendale")
         existing.update(data)
-        await db.organizations.replace_one({"id": DEFAULT_ORG_ID}, existing)
+        await db.organizations.replace_one({"id": org_id}, existing)
     else:
-        rec = base_record(DEFAULT_ORG_ID, user["id"])
-        rec.update({"id": DEFAULT_ORG_ID, **data})
+        rec = base_record(org_id, user["id"])
+        rec.update({"id": org_id, **data})
         await db.organizations.insert_one(rec)
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="UPDATE_PROFILE",
-                    entity_type="organization", entity_id=DEFAULT_ORG_ID)
-    out = await db.organizations.find_one({"id": DEFAULT_ORG_ID}, {"_id": 0})
+    await log_audit(org_id=org_id, user=user, action="UPDATE_PROFILE",
+                    entity_type="organization", entity_id=org_id)
+    out = await db.organizations.find_one({"id": org_id}, {"_id": 0})
     return out

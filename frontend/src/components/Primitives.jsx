@@ -10,8 +10,8 @@ export function PageHeader({ title, subtitle, actions }) {
   );
 }
 
-export function Card({ children, className = "" }) {
-  return <div className={`bg-card border border-border/60 rounded-sm ${className}`}>{children}</div>;
+export function Card({ children, className = "", ...props }) {
+  return <div className={`bg-card border border-border/60 rounded-sm ${className}`} {...props}>{children}</div>;
 }
 
 export function Empty({ text }) {

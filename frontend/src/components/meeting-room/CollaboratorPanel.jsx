@@ -1,8 +1,12 @@
-import { Target, FileText, CheckCircle2, Circle, MessageSquareText, CheckCircle, Users, Activity, Clock3 } from "lucide-react";
+import { useState } from "react";
+import { Target, FileText, CheckCircle2, Circle, MessageSquareText, CheckCircle, Users, Activity, Clock3, ListChecks, Coins, PlayCircle } from "lucide-react";
 import { toast } from "sonner";
+import api, { formatApiError } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SEAT_STATUS_META, DELIVERABLE_STATUS_META, isValidDeliverable } from "./adapter";
 import SeatStatusBadge from "./SeatStatusBadge";
+import MultimodalProjectPanel from "@/components/MultimodalProjectPanel";
 
 function initials(name) {
   if (!name) return "?";
@@ -27,7 +31,34 @@ function HistoryDot({ state }) {
   return <Circle className="w-3.5 h-3.5 text-muted-foreground/40 shrink-0" strokeWidth={1.75} />;
 }
 
-export default function CollaboratorPanel({ collaborator, summary }) {
+// planId presente => collaboratore di un piano REALE (Sala Riunioni via
+// ?planId=): le azioni parlano davvero con M2 (approvazione/rifiuto TASK,
+// unica azione che M2 espone prima dell'esecuzione), mai un toast demo.
+// Senza planId (modalita' demo locale) le azioni restano simulate.
+export default function CollaboratorPanel({ collaborator, summary, planId, onActionDone }) {
+  const [busy, setBusy] = useState(false);
+  const { hasRole } = useAuth();
+
+  // Item #7 (DECISIONE UFFICIALE): l'utente normale non deve dover aprire
+  // "Piani M2" per avviare il lavoro — il piano si approva (tutti i task in
+  // un colpo solo, POST /m2/plans/:id/approve, stessa azione di
+  // PlanDetail.jsx::approvePlan) direttamente da qui. Visibile solo quando
+  // esiste davvero un piano REALE non ancora approvato e il ruolo lo
+  // consente (APPROVATORE/ADMIN, stesso gate di PlanDetail.jsx): un
+  // OPERATORE vede lo stato ma non il pulsante, mai un 403 silenzioso.
+  const canApprovePlan = hasRole("APPROVATORE", "ADMIN");
+  const planPendingApproval = Boolean(planId) && summary?.planStatus === "IN_ATTESA_APPROVAZIONE";
+
+  const approvePlan = async () => {
+    setBusy(true);
+    try {
+      await api.post(`/m2/plans/${planId}/approve`);
+      toast.success("Piano approvato: il lavoro è avviato.");
+      onActionDone?.();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setBusy(false); }
+  };
+
   if (!collaborator) {
     return (
       <div className="p-4" data-testid="collaborator-panel-empty">
@@ -37,22 +68,66 @@ export default function CollaboratorPanel({ collaborator, summary }) {
           <div className="space-y-2" data-testid="meeting-summary">
             <div className="label-caps mb-1">Riepilogo riunione</div>
             <SummaryRow icon={Users} label="Collaboratori convocati" value={summary.collaboratorsCount} />
+            {summary.tasksCount != null && (
+              <SummaryRow icon={ListChecks} label="Attività pianificate" value={summary.tasksCount} />
+            )}
             <SummaryRow icon={Activity} label="Attività al lavoro" value={summary.activeCount} tone="text-emerald-400" />
             <SummaryRow icon={Clock3} label="Deliverable in approvazione" value={summary.pendingApprovalCount} tone="text-amber-400" />
+            {summary.estimatedCost != null && (
+              <SummaryRow icon={Coins} label="Costo stimato" value={`$${summary.estimatedCost.toFixed(5)}`} />
+            )}
+          </div>
+        )}
+        {planPendingApproval && (
+          <div className="mt-4 pt-4 border-t border-border/60">
+            {canApprovePlan ? (
+              <button
+                type="button"
+                data-testid="approve-and-start-plan"
+                disabled={busy}
+                onClick={approvePlan}
+                className="w-full flex items-center justify-center gap-2 rounded-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm font-medium hover:opacity-90 active:scale-[0.98] transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <PlayCircle className="w-4 h-4" strokeWidth={1.75} /> Approva e avvia il lavoro
+              </button>
+            ) : (
+              <p className="text-[11px] text-muted-foreground text-center">
+                Il piano è in attesa di approvazione da un responsabile (ruolo Approvatore/Admin).
+              </p>
+            )}
           </div>
         )}
       </div>
     );
   }
 
-  const canAct = isValidDeliverable(collaborator.document);
+  const isReal = Boolean(planId);
+  const multimodalKind = collaborator.document?.projectKind || null; // "reel" | "flyer" | null
+  const canApproveTask = isReal && collaborator.taskId && collaborator.taskStatus === "IN_ATTESA_APPROVAZIONE";
+  const canAct = isReal ? canApproveTask : isValidDeliverable(collaborator.document);
   const docMeta = collaborator.document && DELIVERABLE_STATUS_META[collaborator.document.status];
 
-  const requestChange = () => {
-    toast.info("Richiesta di modifica registrata (demo): non è ancora collegata alla squadra reale.");
+  const requestChange = async () => {
+    if (!isReal) { toast.info("Richiesta di modifica registrata (demo): non è ancora collegata alla squadra reale."); return; }
+    const reason = window.prompt("Motivazione del rifiuto (obbligatoria):");
+    if (!reason || !reason.trim()) return;
+    setBusy(true);
+    try {
+      await api.post(`/m2/plans/${planId}/tasks/${collaborator.taskId}/reject`, { reason: reason.trim() });
+      toast.success("Task rifiutato: i dipendenti verranno saltati, il resto del piano prosegue.");
+      onActionDone?.();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setBusy(false); }
   };
-  const approve = () => {
-    toast.success("Approvazione registrata (demo): non è ancora collegata al motore M2.");
+  const approve = async () => {
+    if (!isReal) { toast.success("Approvazione registrata (demo): non è ancora collegata al motore M2."); return; }
+    setBusy(true);
+    try {
+      await api.post(`/m2/plans/${planId}/tasks/${collaborator.taskId}/approve`);
+      toast.success("Task approvato: entrerà in coda per l'elaborazione.");
+      onActionDone?.();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setBusy(false); }
   };
 
   return (
@@ -86,7 +161,9 @@ export default function CollaboratorPanel({ collaborator, summary }) {
 
       <div className="mb-5">
         <div className="label-caps mb-2">Documento in produzione</div>
-        {collaborator.document ? (
+        {multimodalKind && collaborator.document?.projectId ? (
+          <MultimodalProjectPanel kind={multimodalKind} projectId={collaborator.document.projectId} compact />
+        ) : collaborator.document ? (
           <div className="flex items-center gap-2.5" data-testid="panel-document">
             <div className="w-7 h-7 rounded-md bg-muted grid place-items-center shrink-0">
               <FileText className="w-3.5 h-3.5 text-muted-foreground" strokeWidth={1.75} />
@@ -119,29 +196,48 @@ export default function CollaboratorPanel({ collaborator, summary }) {
       )}
 
       <div className="mt-auto pt-4 space-y-2">
-        {!canAct && (
+        {isReal && !canApproveTask && !multimodalKind && (
+          <p className="text-[11px] text-muted-foreground text-center">
+            {collaborator.taskStatus ? "Nessuna approvazione in attesa per questo task." : "Azioni disponibili solo quando è pronto un deliverable valido."}
+          </p>
+        )}
+        {!isReal && !canAct && (
           <p className="text-[11px] text-muted-foreground text-center">
             Azioni disponibili solo quando è pronto un deliverable valido.
           </p>
         )}
-        <button
-          type="button"
-          data-testid="panel-request-change"
-          disabled={!canAct}
-          onClick={requestChange}
-          className="w-full flex items-center justify-center gap-2 rounded-sm border border-primary/50 text-primary px-4 py-2 text-sm font-medium hover:bg-primary/10 active:scale-[0.98] transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <MessageSquareText className="w-4 h-4" strokeWidth={1.75} /> Chiedi una modifica
-        </button>
-        <button
-          type="button"
-          data-testid="panel-approve"
-          disabled={!canAct}
-          onClick={approve}
-          className="w-full flex items-center justify-center gap-2 rounded-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm font-medium hover:opacity-90 active:scale-[0.98] transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <CheckCircle className="w-4 h-4" strokeWidth={1.75} /> Approva
-        </button>
+        {multimodalKind && canApproveTask && (
+          <button
+            type="button"
+            onClick={approve}
+            disabled={busy}
+            className="w-full flex items-center justify-center gap-2 rounded-sm border border-primary/50 text-primary px-4 py-2 text-sm font-medium hover:bg-primary/10 transition-colors duration-200"
+          >
+            <CheckCircle className="w-4 h-4" strokeWidth={1.75} /> Approva l'avvio del task nel piano
+          </button>
+        )}
+        {!multimodalKind && (
+          <>
+            <button
+              type="button"
+              data-testid="panel-request-change"
+              disabled={!canAct || busy}
+              onClick={requestChange}
+              className="w-full flex items-center justify-center gap-2 rounded-sm border border-primary/50 text-primary px-4 py-2 text-sm font-medium hover:bg-primary/10 active:scale-[0.98] transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <MessageSquareText className="w-4 h-4" strokeWidth={1.75} /> {isReal ? "Rifiuta" : "Chiedi una modifica"}
+            </button>
+            <button
+              type="button"
+              data-testid="panel-approve"
+              disabled={!canAct || busy}
+              onClick={approve}
+              className="w-full flex items-center justify-center gap-2 rounded-sm bg-primary text-primary-foreground px-4 py-2.5 text-sm font-medium hover:opacity-90 active:scale-[0.98] transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <CheckCircle className="w-4 h-4" strokeWidth={1.75} /> {isReal ? "Approva l'avvio" : "Approva"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

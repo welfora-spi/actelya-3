@@ -5,6 +5,13 @@ from .db import db
 from .security import decode_token
 
 
+def assert_same_org(record: dict | None, user: dict, not_found_detail: str = "Risorsa non trovata"):
+    """Tenant isolation guard: 404 (not 403) so cross-tenant probing can't distinguish
+    'exists in another org' from 'does not exist'. Mai fidarsi di un id senza questo controllo."""
+    if not record or record.get("organization_id") != user.get("organization_id"):
+        raise HTTPException(status_code=404, detail=not_found_detail)
+
+
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("access_token")
     if not token:

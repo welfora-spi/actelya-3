@@ -160,3 +160,89 @@ def test_config_import_non_produce_traffico_di_rete():
 
 def test_connector_gateway_import_non_produce_traffico_di_rete():
     importlib.reload(cg)
+
+
+# ---------------- adapter reale (DECISIONE UFFICIALE "100% REALE") ----------------
+def test_adapter_reale_non_invocato_senza_tutte_le_condizioni(gateway, monkeypatch):
+    """Un adapter REGISTRATO non basta da solo: servono anche
+    REAL_EXTERNAL_ACTIONS=True, CONNECTOR_MODE='real' e requested_mode='real'."""
+    chiamato = {"n": 0}
+    gateway.register_real_adapter("publish_social", lambda req: chiamato.__setitem__("n", chiamato["n"] + 1) or {})
+
+    with pytest.raises(AzioneEsternaBloccata):
+        gateway.request(cg.ConnectorRequest(action_type="publish_social", payload={}, requested_mode="real"))
+    assert chiamato["n"] == 0
+
+    monkeypatch.setattr(brain_config, "REAL_EXTERNAL_ACTIONS", True)
+    with pytest.raises(AzioneEsternaBloccata):
+        gateway.request(cg.ConnectorRequest(action_type="publish_social", payload={}, requested_mode="real"))
+    assert chiamato["n"] == 0  # manca ancora CONNECTOR_MODE == 'real'
+
+
+def test_adapter_reale_invocato_con_tutte_le_condizioni(gateway, monkeypatch):
+    monkeypatch.setattr(brain_config, "REAL_EXTERNAL_ACTIONS", True)
+    monkeypatch.setattr(brain_config, "CONNECTOR_MODE", "real")
+    ricevuto = {}
+
+    def adapter(req):
+        ricevuto["payload"] = req.payload
+        return {"external_post_id": "post-123"}
+
+    gateway.register_real_adapter("publish_social", adapter)
+    result = gateway.request(cg.ConnectorRequest(
+        action_type="publish_social", payload={"organization_id": "org-1"}, requested_mode="real"))
+
+    assert result.status == "ESEGUITO_REALE"
+    assert result.executed is True
+    assert result.data == {"external_post_id": "post-123"}
+    assert ricevuto["payload"] == {"organization_id": "org-1"}
+    assert gateway.attempts()[-1].result_status == "ESEGUITO_REALE"
+
+
+def test_adapter_senza_registrazione_resta_bloccato_anche_a_configurazione_corretta(gateway, monkeypatch):
+    monkeypatch.setattr(brain_config, "REAL_EXTERNAL_ACTIONS", True)
+    monkeypatch.setattr(brain_config, "CONNECTOR_MODE", "real")
+    with pytest.raises(AzioneEsternaBloccata):
+        gateway.request(cg.ConnectorRequest(action_type="publish_social", payload={}, requested_mode="real"))
+
+
+def test_adapter_reale_che_solleva_eccezione_marca_il_tentativo_errore(gateway, monkeypatch):
+    monkeypatch.setattr(brain_config, "REAL_EXTERNAL_ACTIONS", True)
+    monkeypatch.setattr(brain_config, "CONNECTOR_MODE", "real")
+
+    def adapter(req):
+        raise RuntimeError("errore rete simulato")
+
+    gateway.register_real_adapter("publish_social", adapter)
+    with pytest.raises(RuntimeError):
+        gateway.request(cg.ConnectorRequest(action_type="publish_social", payload={}, requested_mode="real"))
+    assert gateway.attempts()[-1].result_status == "ERRORE_REALE"
+
+
+def test_registrazione_adapter_su_action_type_sconosciuto_rifiutata(gateway):
+    with pytest.raises(RichiestaConnettoreNonValida):
+        gateway.register_real_adapter("elimina_database", lambda req: {})
+
+
+def test_unregister_real_adapter_ripristina_il_blocco(gateway, monkeypatch):
+    monkeypatch.setattr(brain_config, "REAL_EXTERNAL_ACTIONS", True)
+    monkeypatch.setattr(brain_config, "CONNECTOR_MODE", "real")
+    gateway.register_real_adapter("publish_social", lambda req: {"ok": True})
+    gateway.unregister_real_adapter("publish_social")
+    with pytest.raises(AzioneEsternaBloccata):
+        gateway.request(cg.ConnectorRequest(action_type="publish_social", payload={}, requested_mode="real"))
+
+
+def test_richiesta_reale_senza_requested_mode_esplicito_resta_dry_run(gateway, monkeypatch):
+    """Un adapter registrato e la configurazione a posto NON bastano se il
+    singolo chiamante non chiede esplicitamente 'real' (mai un'esecuzione
+    reale implicita)."""
+    monkeypatch.setattr(brain_config, "REAL_EXTERNAL_ACTIONS", True)
+    monkeypatch.setattr(brain_config, "CONNECTOR_MODE", "real")
+    gateway.register_real_adapter("publish_social", lambda req: {"ok": True})
+    # requested_mode di default e' 'dry_run': qui pero' config_suggerisce_reale
+    # e' comunque True (CONNECTOR_MODE='real'), quindi il gateway blocca
+    # (stessa barriera "config manomessa" di sempre) invece di eseguire il
+    # reale senza che nessuno lo abbia chiesto esplicitamente.
+    with pytest.raises(AzioneEsternaBloccata):
+        gateway.request(cg.ConnectorRequest(action_type="publish_social", payload={}))

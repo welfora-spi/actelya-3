@@ -3,33 +3,52 @@ import { useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useSystem } from "@/context/SystemContext";
 import { cn } from "@/lib/utils";
+import { formatBudgetLine } from "@/lib/budget";
 import {
   LayoutDashboard, Target, CheckSquare, PlayCircle, FileText, Bot, Plug,
-  Building2, Users, Wallet, ScrollText, Settings as SettingsIcon, LogOut, ShieldAlert, FlaskConical, Network, Presentation
+  Building2, Users, Wallet, ScrollText, Settings as SettingsIcon, LogOut, ShieldAlert, FlaskConical, Network, Presentation,
+  BookOpen, Clapperboard,
 } from "lucide-react";
 
+// "Esecuzioni" e "Centro Approvazioni" (vecchio flusso M1) sono rimaste
+// nascoste dal menu: i nuovi obiettivi passano esclusivamente dal brain
+// (Nuovo Obiettivo -> /brain/plans -> Sala Riunioni). File e route restano
+// attivi per compatibilita' con dati storici gia' esistenti, vedi App.js.
+//
+// Correzione item #9 (DECISIONE UFFICIALE): il percorso CLIENTE (qualunque
+// ruolo diverso da ADMIN) converge SOLO su Dashboard, Sala riunioni, Nuovo
+// Obiettivo, Risultati, Conoscenza azienda — mai un riferimento tecnico a
+// M2, al laboratorio Reel o alle pagine provider. L'approvazione del piano e
+// dei singoli task/media avviene ormai interamente dentro Sala Riunioni
+// (vedi CollaboratorPanel.jsx), quindi "Piani (M2)" non serve piu' al
+// cliente: resta comunque raggiungibile da ADMIN per una supervisione
+// tecnica completa. adminOnly=true = nascosto in nav a chi non ha ruolo
+// ADMIN (la route resta attiva in App.js: un accesso diretto via URL non e'
+// bloccato qui, e' solo tolto dal percorso visibile).
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/sala-riunioni", label: "Sala riunioni", icon: Presentation },
   { to: "/nuovo-obiettivo", label: "Nuovo Obiettivo", icon: Target },
-  { to: "/piani", label: "Piani (M2)", icon: Network },
-  { to: "/approvazioni", label: "Centro Approvazioni", icon: CheckSquare },
-  { to: "/esecuzioni", label: "Esecuzioni", icon: PlayCircle },
-  { to: "/deliverable", label: "Deliverable", icon: FileText },
-  { to: "/operatori", label: "Operatori AI", icon: Bot },
-  { to: "/connessioni", label: "Connessioni e API", icon: Plug },
-  { to: "/profilo", label: "Profilo aziendale", icon: Building2 },
-  { to: "/utenti", label: "Utenti e ruoli", icon: Users },
-  { to: "/budget", label: "Budget e costi", icon: Wallet },
-  { to: "/audit", label: "Audit Log", icon: ScrollText },
-  { to: "/impostazioni", label: "Impostazioni", icon: SettingsIcon },
+  { to: "/onboarding", label: "Conoscenza azienda", icon: BookOpen },
+  { to: "/deliverable", label: "Risultati", icon: FileText },
+  { to: "/piani", label: "Piani (M2)", icon: Network, adminOnly: true },
+  { to: "/operatori", label: "Operatori AI", icon: Bot, adminOnly: true },
+  { to: "/connessioni", label: "Connessioni e API", icon: Plug, adminOnly: true },
+  { to: "/reel", label: "Reel — laboratorio", icon: Clapperboard, adminOnly: true },
+  { to: "/profilo", label: "Profilo aziendale", icon: Building2, adminOnly: true },
+  { to: "/utenti", label: "Utenti e ruoli", icon: Users, adminOnly: true },
+  { to: "/budget", label: "Budget e costi", icon: Wallet, adminOnly: true },
+  { to: "/audit", label: "Audit Log", icon: ScrollText, adminOnly: true },
+  { to: "/impostazioni", label: "Impostazioni", icon: SettingsIcon, adminOnly: true },
 ];
 
 export default function Layout({ children }) {
-  const { user, logout } = useAuth();
+  const { user, logout, hasRole } = useAuth();
   const { mode, budget, refresh } = useSystem();
   const navigate = useNavigate();
   const real = mode === "REALE";
+  const isAdmin = hasRole("ADMIN");
+  const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -39,10 +58,10 @@ export default function Layout({ children }) {
       <aside className="w-60 shrink-0 border-r border-border/60 flex flex-col bg-[#0b0b0d] sticky top-0 h-screen">
         <div className="h-14 flex items-center px-4 border-b border-border/60">
           <div className="w-6 h-6 rounded-sm bg-primary text-primary-foreground grid place-items-center font-display font-bold text-sm">A</div>
-          <span className="ml-2 font-display font-semibold tracking-tight text-lg">ACTELYA<span className="text-muted-foreground"> 2</span></span>
+          <span className="ml-2 font-display font-semibold tracking-tight text-lg">ACTELYA<span className="text-muted-foreground"> 3</span></span>
         </div>
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
-          {NAV.map((n) => (
+          {visibleNav.map((n) => (
             <NavLink
               key={n.to}
               to={n.to}
@@ -74,23 +93,29 @@ export default function Layout({ children }) {
 
       {/* Main */}
       <div className="flex-1 min-w-0 flex flex-col">
-        {/* Mode top border */}
-        <div className={cn("h-1 w-full", real ? "bg-red-500" : "bg-amber-500")} />
+        {/* Mode top border + badge: informazione tecnica sulla modalita' di
+            esecuzione (SIMULAZIONE/REALE) — riservata ad ADMIN (item #9:
+            il percorso cliente non deve mai vedere terminologia tecnica
+            "modalita'/simulazione", ne' un banner che suggerisca una scelta
+            operativa: il sistema opera sempre nel solo flusso reale). */}
+        {isAdmin && <div className={cn("h-1 w-full", real ? "bg-red-500" : "bg-amber-500")} />}
         {/* Topbar */}
         <header className="h-13 sticky top-1 z-20 backdrop-blur-xl bg-background/70 border-b border-border/60 flex items-center justify-between px-6 py-2">
-          <div className={cn(
-            "flex items-center gap-2 rounded-sm border px-3 py-1.5 text-xs font-mono font-semibold tracking-wide",
-            real ? "bg-red-500/10 border-red-500/30 text-red-500" : "bg-amber-500/10 border-amber-500/30 text-amber-500"
-          )} data-testid="mode-banner">
-            {real ? <ShieldAlert className="w-4 h-4" /> : <FlaskConical className="w-4 h-4" />}
-            MODALITÀ {mode}
-            {real ? " — chiamate reali possibili" : " — nessuna chiamata AI reale"}
-          </div>
+          {isAdmin ? (
+            <div className={cn(
+              "flex items-center gap-2 rounded-sm border px-3 py-1.5 text-xs font-mono font-semibold tracking-wide",
+              real ? "bg-red-500/10 border-red-500/30 text-red-500" : "bg-amber-500/10 border-amber-500/30 text-amber-500"
+            )} data-testid="mode-banner">
+              {real ? <ShieldAlert className="w-4 h-4" /> : <FlaskConical className="w-4 h-4" />}
+              MODALITÀ {mode}
+              {real ? " — chiamate reali possibili" : " — nessuna chiamata AI reale"}
+            </div>
+          ) : <div />}
           <div className="flex items-center gap-4">
             <div className="text-right">
               <div className="label-caps">Budget residuo</div>
               <div className="font-mono text-sm">
-                ${(budget?.residual ?? 0).toFixed(4)}<span className="text-muted-foreground"> / ${(budget?.general_limit ?? 0).toFixed(2)}</span>
+                {formatBudgetLine(budget?.general_limit, budget?.residual)}
               </div>
             </div>
           </div>

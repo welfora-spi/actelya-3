@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 
 from ..models import now_iso, new_id
 from .models import new_plan, new_task
-from .planner import plan_skeleton
+from .planner import plan_skeleton, build_dag, validate_dag, topological_order
 from .agents_registry import select_agent, AGENT_CONTRACTS, assert_action_allowed, ContractError
 from .deliverables import produce_deliverable, validate_deliverable, create_deliverable_version
 from .reviews import review_deliverable
@@ -57,9 +57,33 @@ async def set_task_status(db, task, new_status, extra=None):
 
 
 # --------- Creazione piano + preventivo ---------
-async def create_plan(db, org_id, user_id, goal_id, goal_text):
+async def create_plan(db, org_id, user_id, goal_id, goal_text, *, task_specs=None):
+    """task_specs (opzionale): quando fornito da brain/service.py (SpecTask
+    [{key, name, deliverable_type, depends_on}], stessa forma di
+    planner.decompose()), SOSTITUISCE la classificazione/scomposizione
+    indipendente di M2 (planner.classify_objective + decompose): il piano
+    riflette ESATTAMENTE la squadra gia' selezionata dal brain
+    (agent_selector.select_agents), mai una riclassificazione del solo testo
+    che potrebbe aggiungere task estranei (es. l'intera campagna quando e'
+    stato chiesto solo un flyer). objective_type/intent restano comunque
+    quelli di plan_skeleton(goal_text): sono solo un'etichetta descrittiva
+    del piano, non influenzano quali task vengono creati in questo ramo.
+    Un task_specs vuoto e' legittimo (tutte le capability richieste sono
+    REALI — video_reel/flyer_image — e vengono aggiunte subito dopo da
+    brain/service.py come task collegati a un progetto reale, non da qui):
+    in quel caso qui NON si richiede chiarimento, a differenza del percorso
+    testuale invariato (task_specs=None) dove un piano senza alcun task resta
+    un errore di classificazione."""
     sk = plan_skeleton(goal_text)
-    if sk["requires_clarification"] or not sk["valid"] or not sk["tasks"]:
+    if task_specs is not None:
+        validation = validate_dag(task_specs)
+        topo = topological_order(task_specs) if validation["ok"] else []
+        sk = {
+            **sk, "tasks": task_specs, "dag": build_dag(task_specs),
+            "topo_order": topo, "valid": validation["ok"], "validation_errors": validation["errors"],
+            "requires_clarification": not validation["ok"],
+        }
+    if sk["requires_clarification"] or not sk["valid"] or (task_specs is None and not sk["tasks"]):
         return {"plan": None, "requires_clarification": True, "objective_type": sk["objective_type"],
                 "validation_errors": sk["validation_errors"]}
     agent_ids = [select_agent(t["deliverable_type"])["agent_id"] for t in sk["tasks"]]
@@ -485,7 +509,15 @@ async def _load_plan_authz(plan_id, user):
 
 
 async def _assert_simulation(org_id):
-    """M2 opera esclusivamente in SIMULAZIONE: blocco sicuro se la modalità non è simulata."""
+    """M2 produce sempre contenuto deterministico 'SIMULAZIONE' (invariato):
+    QUESTO non e' mai cambiato. Il blocco 409 storico su ai_real_mode=True e'
+    stato RIMOSSO dalle route sotto (decisione esplicita: il Brain deve poter
+    creare/approvare/eseguire un piano — comprensione, pianificazione, DAG,
+    handoff, stati, audit — anche quando l'org ha capability REALI attive per
+    ALTRE parti dello stesso piano, es. domains/reel.py/flyer.py). La
+    funzione resta definita (e testata direttamente da
+    tests/test_m2_block5.py) per compatibilità e per un futuro uso opt-in;
+    non e' piu' invocata da alcuna route di default."""
     s = await _global_db.settings.find_one({"id": org_id}) or {}
     if s.get("ai_real_mode"):
         raise HTTPException(409, "Strumento di SIMULAZIONE: disponibile solo in modalità SIMULAZIONE (modalità attuale: REALE).")
@@ -502,7 +534,6 @@ class RejectBody(BaseModel):
 @router.post("/plans")
 async def http_create_plan(body: PlanBody, user: dict = Depends(require_roles("OPERATORE", "ADMIN"))):
     org_id = user.get("organization_id") or DEFAULT_ORG_ID
-    await _assert_simulation(org_id)
     goal_id = new_id("goal")
     await _global_db.goals.insert_one({**base_record(org_id, user["id"]), "id": goal_id,
                                        "text": body.text, "status": "IN_APPROVAZIONE", "mode": "SIMULAZIONE"})
@@ -567,7 +598,6 @@ async def http_list_reviews(plan_id: str, user: dict = Depends(get_current_user)
 async def http_review_task(plan_id: str, task_id: str,
                            user: dict = Depends(require_roles("ADMIN", "APPROVATORE"))):
     plan = await _load_plan_authz(plan_id, user)
-    await _assert_simulation(plan.get("organization_id"))
     task = await _global_db.tasks.find_one({"id": task_id, "plan_id": plan_id})
     if not task:
         raise HTTPException(404, "Task non trovato")
@@ -621,6 +651,5 @@ async def http_stop_plan(plan_id: str, user: dict = Depends(require_roles("ADMIN
 @router.post("/plans/{plan_id}/tick")
 async def http_tick(plan_id: str, user: dict = Depends(require_roles("OPERATORE", "APPROVATORE", "ADMIN"))):
     plan = await _load_plan_authz(plan_id, user)
-    await _assert_simulation(plan.get("organization_id"))
     res = await run_ready_tasks(_global_db, plan_id)
     return {**res, "mode": "SIMULAZIONE", "simulation_tool": True}

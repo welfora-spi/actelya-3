@@ -107,6 +107,26 @@ let webpackConfig = {
   },
 };
 
+// The webpack alias above only resolves "@/..." for the dev server/build — Jest needs
+// its own moduleNameMapper for the same alias, otherwise every "@/..." import in tests
+// (and in the components they render) fails to resolve.
+webpackConfig.jest = {
+  configure: (jestConfig) => {
+    jestConfig.moduleNameMapper = {
+      ...jestConfig.moduleNameMapper,
+      "^@/(.*)$": "<rootDir>/src/$1",
+      // react-router(-dom) v7's nested conditional "exports" maps aren't resolved
+      // correctly by Jest's resolver (no "browser" condition, and the "node"/"default"
+      // branches aren't reached) — point straight at their CJS builds, which work fine
+      // standalone (react-router-dom re-exports from "react-router"/"react-router/dom").
+      "^react-router-dom$": "<rootDir>/node_modules/react-router-dom/dist/index.js",
+      "^react-router/dom$": "<rootDir>/node_modules/react-router/dist/development/dom-export.js",
+      "^react-router$": "<rootDir>/node_modules/react-router/dist/development/index.js",
+    };
+    return jestConfig;
+  },
+};
+
 webpackConfig.devServer = (devServerConfig) => {
   // Add health check endpoints if enabled
   if (config.enableHealthCheck && setupHealthEndpoints && healthPluginInstance) {

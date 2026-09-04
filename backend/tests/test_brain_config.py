@@ -34,13 +34,27 @@ def test_real_external_actions_stringa_vuota_e_sicuro():
     assert config.resolve_real_external_actions({"REAL_EXTERNAL_ACTIONS": ""}) is False
 
 
-def test_tentativo_di_modalita_reale_non_puo_mai_risolvere_a_reale():
-    # Nessun valore riconosciuto porta AI_PROVIDER_MODE/CONNECTOR_MODE a
-    # qualcosa di diverso da mock/dry_run: in questa fase non esiste
-    # ALCUNA stringa che sblocchi una modalità reale.
-    for tentativo in ("real", "live", "production", "true", "1", "REAL", "enabled"):
+def test_valori_non_riconosciuti_per_connector_mode_restano_dry_run():
+    # AGGIORNATO (DECISIONE UFFICIALE "100% REALE"): CONNECTOR_MODE puo' ora
+    # risolvere a 'real' (vedi test_connector_mode_real_richiede_valore_esatto
+    # sotto), ma SOLO per la stringa esatta 'real' (case-insensitive) — ogni
+    # altro tentativo/refuso resta bloccato su dry_run. AI_PROVIDER_MODE non
+    # ha invece alcun valore reale in questa fase (i provider AI reali non
+    # passano da questo flag, vedi domains/connections.py): resta sempre 'mock'.
+    for tentativo in ("live", "production", "true", "1", "enabled", "reale", " real ish"):
         assert config.resolve_ai_provider_mode({"AI_PROVIDER_MODE": tentativo}) == "mock"
         assert config.resolve_connector_mode({"CONNECTOR_MODE": tentativo}) == "dry_run"
+
+
+def test_connector_mode_real_richiede_valore_esatto():
+    # 'real' (case-insensitive, spazi tollerati) e' l'UNICO valore che
+    # sblocca la modalita' reale del connector — da solo NON e' comunque
+    # sufficiente per un'azione reale: gateways/connector_gateway.py
+    # verifica anche REAL_EXTERNAL_ACTIONS, un adapter reale registrato e la
+    # configurazione/verifica del connector per l'organizzazione.
+    assert config.resolve_connector_mode({"CONNECTOR_MODE": "real"}) == "real"
+    assert config.resolve_connector_mode({"CONNECTOR_MODE": "REAL"}) == "real"
+    assert config.resolve_connector_mode({"CONNECTOR_MODE": " real "}) == "real"
 
 
 def test_real_external_actions_puo_essere_impostato_esplicitamente_a_vero():

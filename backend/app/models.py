@@ -39,3 +39,13 @@ DELIVERABLE_STATUS = ["COMPLETATO", "COMPLETATO_CON_AVVISI", "BLOCCATO"]
 ACTION_STATUS = ["NON_RICHIESTA", "IN_ATTESA_APPROVAZIONE", "AUTORIZZATA", "BLOCCATA", "ESEGUITA", "FALLITA"]
 INTENT_TYPES = ["PRODUZIONE", "AZIONE_ESTERNA", "MISTO", "AMBIGUO"]
 INTEGRATION_STATUS = ["NON_CONFIGURATA", "CONFIGURATA", "VERIFICATA", "ERRORE", "DISATTIVATA"]
+
+# ---------- Fact Ledger (company knowledge) ----------
+# How a fact came to be known.
+FACT_METHOD = ["DICHIARATO", "ESTRATTO", "DEDOTTO", "VERIFICATO"]
+# Lifecycle state of a fact (independent of method).
+FACT_STATE = ["ATTIVO", "SCADUTO", "CONTRADDITTORIO"]
+# Onboarding lifecycle of a tenant/organization.
+ONBOARDING_STATUS = ["IN_CORSO", "COMPLETATO"]
+# Discovery run lifecycle (always SIMULATO in this milestone: no real network calls).
+DISCOVERY_STATUS = ["IN_CODA", "IN_ESECUZIONE", "COMPLETATO", "FALLITO"]

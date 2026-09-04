@@ -5,6 +5,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useSystem } from "@/context/SystemContext";
 import { toast } from "sonner";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { formatBudgetLine, isBudgetConfigured } from "@/lib/budget";
 
 export default function Budget() {
   const [b, setB] = useState(null);
@@ -24,10 +25,13 @@ export default function Budget() {
     catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
 
+  const configured = isBudgetConfigured(b?.general_limit);
   const chart = [
     { name: "Limite", value: b?.general_limit || 0 },
     { name: "Speso (sim)", value: b?.spent_simulated || 0 },
-    { name: "Residuo", value: b?.residual || 0 },
+    // Un "Residuo" negativo con limite non configurato (0) sarebbe fuorviante
+    // (sembrerebbe uno sforamento): la barra si mostra solo a limite impostato.
+    ...(configured ? [{ name: "Residuo", value: b?.residual || 0 }] : []),
   ];
   const colors = ["#64748b", "#f59e0b", "#22c55e"];
 
@@ -66,7 +70,7 @@ export default function Budget() {
             {isAdmin && <button data-testid="budget-save" onClick={save} className="w-full bg-primary text-primary-foreground rounded-sm px-4 py-2 text-sm hover:opacity-90 active:scale-[0.98] transition-colors duration-200">Salva budget</button>}
             <div className="pt-2 border-t border-border/60 space-y-1.5 text-sm">
               <Row l="Speso (sim)" v={`$${(b?.spent_simulated || 0).toFixed(5)}`} />
-              <Row l="Residuo" v={`$${(b?.residual || 0).toFixed(5)}`} />
+              <Row l="Residuo" v={formatBudgetLine(b?.general_limit, b?.residual)} />
             </div>
           </div>
         </Card>

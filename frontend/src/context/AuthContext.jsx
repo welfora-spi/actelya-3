@@ -23,6 +23,12 @@ export function AuthProvider({ children }) {
     return data.user;
   };
 
+  const register = async (body) => {
+    const { data } = await api.post("/tenant/register", body);
+    setUser(data.user);
+    return data.user;
+  };
+
   const logout = async () => {
     try { await api.post("/auth/logout"); } catch { /* ignore */ }
     setUser(null);
@@ -31,7 +37,7 @@ export function AuthProvider({ children }) {
   const hasRole = (...roles) => user && roles.includes(user.role);
 
   return (
-    <AuthContext.Provider value={{ user, setUser, login, logout, loadMe, hasRole, formatApiError }}>
+    <AuthContext.Provider value={{ user, setUser, login, register, logout, loadMe, hasRole, formatApiError }}>
       {children}
     </AuthContext.Provider>
   );

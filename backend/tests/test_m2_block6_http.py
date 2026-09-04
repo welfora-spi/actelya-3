@@ -4,23 +4,8 @@ import copy
 import pytest
 import requests
 
+from conftest import BASE_URL, API_URL as API, ADMIN_EMAIL, ADMIN_TEST_PASSWORD as ADMIN_PASSWORD
 
-def _load_base_url():
-    url = os.environ.get("REACT_APP_BACKEND_URL", "").strip()
-    if not url:
-        with open("/app/frontend/.env") as f:
-            for line in f:
-                if line.startswith("REACT_APP_BACKEND_URL="):
-                    url = line.split("=", 1)[1].strip()
-                    break
-    return url.rstrip("/")
-
-
-BASE_URL = _load_base_url()
-API = f"{BASE_URL}/api"
-
-ADMIN_EMAIL = "raffaelepatarino77@gmail.com"
-ADMIN_PASSWORD = "Actelya2!Milestone"
 FINAL_PWD = "Actelya!Test2025"
 INITIAL_PWD = "TempPass!12345"
 
@@ -40,7 +25,7 @@ def admin_token():
     return r.json()["access_token"]
 
 
-def _ensure_user(admin_token, role, tag="b4"):
+def _ensure_user(admin_token, role, tag="b6"):
     email = f"test_{tag}_{role.lower()}@example.com"
     r = _login(email, FINAL_PWD)
     if r.status_code == 200:

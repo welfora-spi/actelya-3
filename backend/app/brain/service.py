@@ -50,8 +50,10 @@ from typing import Optional
 
 from ..m2 import engine as m2_engine
 from ..m2.deliverables import validate_deliverable
+from ..m2.models import new_task
+from ..m2.planner import DELIVERABLE_AGENT as M2_DELIVERABLE_AGENT
 from ..models import base_record, new_id
-from .agents.agent_map import COORDINATOR_FRONTEND_ID
+from .agents.agent_map import COORDINATOR_FRONTEND_ID, mapping_by_capability
 from .audit.memory_audit import (
     EVENT_AGENT_EXCLUDED,
     EVENT_AGENT_SELECTED,
@@ -70,7 +72,7 @@ from .audit.memory_audit import (
 )
 from .capability_selector import select_capabilities
 from .classifier import triage_goal
-from .context import extract_goal_context
+from .context import augment_goal_text, extract_goal_context
 from .gateway import get_default_gateway
 from .guard import guard_content
 from .memory.session import get_session_store
@@ -83,9 +85,64 @@ from .planning.agent_selector import (
 )
 from .planning.handoff import HANDOFF_READY, collect_task_handoffs
 from .producers import produce_brain_deliverable
+from ..domains.knowledge import current_facts_map
+from ..domains import reel as reel_domain
+from ..domains import flyer as flyer_domain
+from fastapi import HTTPException
 
 _ACTOR_SELECTOR = "brain.planning.agent_selector"
 _ACTOR_SERVICE = "brain.service"
+
+# Item #10 (DECISIONE UFFICIALE) — marcatore additivo, MAI retroattivo: un
+# piano creato PRIMA della correzione item #6 (M2 costruiva i task dalla
+# propria classify_objective/decompose indipendente, non dalla selezione del
+# brain) non ha questo campo. Nessuna migrazione/cancellazione di dati
+# esistenti: l'assenza del campo e' sufficiente per riconoscere un piano
+# storico e non confonderlo con un risultato prodotto dal flusso corrente
+# (vedi Plans.jsx, che mostra un'etichetta "storico" quando manca).
+PLAN_GENERATION_TAG = "brain_single_team_v2"
+
+# Capability rilevate dal brain (agent_selector.detect_capabilities) -> deliverable_type
+# nativo di M2 (planner.DELIVERABLE_AGENT ne conosce l'agente). SOLO le capability qui
+# elencate producono un task M2 "classico" (prodotto simulato deterministico via
+# m2/deliverables.py). Le altre capability riconosciute NON compaiono qui perche' non
+# hanno un task M2 proprio:
+# - "video_reel"/"flyer_image": task REALE aggiunto piu' sotto, collegato a un progetto
+#   vero (domains/reel.py / domains/flyer.py), mai tramite questa mappa.
+# - "review_compliance"/"audio_voiceover": nessun deliverable_type esiste per loro
+#   (agent_map.py: deliverable_type=None) — restano visibili SOLO come agente convocato
+#   (activeAgentIds), mai come task del DAG.
+_M2_NATIVE_DELIVERABLE = {
+    "strategy": "marketing_strategy",
+    "editorial": "editorial_plan",
+    "social": "social_content",
+    "ads": "ad_campaign_draft",
+    "leadgen": "lead_gen_plan",
+    "analytics": "kpi_report",
+    "email": "email",
+}
+
+
+def _brain_task_specs(detected_intents: list) -> list:
+    """Costruisce gli SpecTask M2 (stessa forma di planner.decompose():
+    {key, name, deliverable_type, depends_on}) ESCLUSIVAMENTE dalle capability che
+    il brain ha realmente selezionato per questo obiettivo — mai dalla
+    classificazione testuale indipendente di M2 (planner.classify_objective +
+    decompose), che ignorerebbe la squadra convocata e potrebbe aggiungere task
+    estranei (es. l'intera campagna quando e' stato chiesto solo un flyer).
+    Nessuna dipendenza forzata tra i task: l'ordine 'campagna completa'
+    (strategia -> editoriale -> social -> ads -> kpi) era un'inferenza di M2
+    sul solo testo, non una decisione del brain — qui ogni capability
+    selezionata resta un task indipendente, approvabile ed eseguibile da solo."""
+    seen: dict = {}
+    for cap in detected_intents:
+        dtype = _M2_NATIVE_DELIVERABLE.get(cap)
+        if dtype and dtype not in seen:
+            seen[dtype] = M2_DELIVERABLE_AGENT[dtype]  # verifica esistenza agente M2 (KeyError se mappa disallineata)
+    return [
+        {"key": f"t{i}", "name": dtype, "deliverable_type": dtype, "depends_on": []}
+        for i, dtype in enumerate(seen.keys(), start=1)
+    ]
 
 
 def _selection_payload(selection: SelectionResult) -> dict:
@@ -121,14 +178,20 @@ def _esito_non_pronto(selection: SelectionResult) -> dict:
     return payload
 
 
-def prepare_brain_session(goal_text: str, *, session_id: Optional[str] = None) -> dict:
+def prepare_brain_session(goal_text: str, *, session_id: Optional[str] = None,
+                           is_reexamination: bool = False) -> dict:
     """Blocco C — funzione PURA (nessun db, nessuna rete): crea/riusa la
     sessione in memoria, esegue triage/selezione agenti e registra nel
     registro audit in-memory tutte le decisioni prese fino al gate
     READY/non-READY. create_plan_with_brain() la richiama SEMPRE per prima;
     se lo stato non è READY, la creazione del piano non avviene affatto e
     questa funzione da sola descrive già l'intero esito osservabile —
-    per questo è testabile senza MongoDB e senza avviare alcun server."""
+    per questo è testabile senza MongoDB e senza avviare alcun server.
+
+    is_reexamination: True quando goal_text è già stato arricchito con le
+    risposte a un chiarimento precedente (vedi create_plan_with_brain,
+    parametro clarification) — usato solo per l'audit, non cambia la
+    logica di selezione/triage, che resta la stessa per qualunque testo."""
     store = get_session_store()
     audit_log = get_audit_log()
     audit_event_ids: list[str] = []
@@ -145,7 +208,9 @@ def prepare_brain_session(goal_text: str, *, session_id: Optional[str] = None) -
         audit_event_ids.append(ev["event_id"])
 
     _log(EVENT_REQUEST_RECEIVED, actor=_ACTOR_SERVICE, decision="RECEIVED",
-         reason="Richiesta ricevuta dal brain.", metadata={"goal_text_length": len(goal_text or "")})
+         reason="Richiesta ricevuta dal brain." if not is_reexamination
+                else "Richiesta ri-esaminata dopo risposte di chiarimento dell'utente.",
+         metadata={"goal_text_length": len(goal_text or ""), "reexamination": is_reexamination})
 
     selection = select_agents(goal_text)
 
@@ -197,11 +262,57 @@ def prepare_brain_session(goal_text: str, *, session_id: Optional[str] = None) -
 
 
 async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, *,
-                                  session_id: Optional[str] = None) -> dict:
+                                  session_id: Optional[str] = None,
+                                  clarification: Optional[dict] = None) -> dict:
+    """clarification (opzionale): risposte dell'utente a un precedente esito
+    NEEDS_CLARIFICATION, forma {"missing_information": [...], "answers": [...]}
+    (stesso ordine/lunghezza delle domande a cui rispondono — vedi
+    router.py::ClarificationAnswers). Se presente, il testo dell'obiettivo
+    viene arricchito con le risposte (context.py::augment_goal_text, stessa
+    sintassi a campo etichettato usata in estrazione — nessun valore fisso,
+    funziona per qualunque nome/campo) PRIMA di ripetere l'intero triage:
+    non è un ramo speciale, è la stessa funzione richiamata su un testo più
+    completo, con lo stesso session_id per continuare la stessa sessione."""
     store = get_session_store()
     audit_log = get_audit_log()
 
-    prep = prepare_brain_session(goal_text, session_id=session_id)
+    # Il Fact Ledger e' la memoria aziendale autorevole: arricchisce il testo
+    # prima di qualunque triage, evitando di chiedere nuovamente dati gia'
+    # dichiarati durante registrazione/onboarding. Il testo originale resta
+    # intatto e i fatti vengono aggiunti con etichette comprese da context.py.
+    if db is not None:
+        try:
+            facts = await current_facts_map(db, org_id)
+        except (AttributeError, TypeError):
+            facts = {}  # fake DB minimali dei test legacy
+        labels = {
+            "ragione_sociale": "Azienda/brand",
+            "nome_commerciale": "Azienda/brand",
+            "prodotto": "Prodotto/servizio",
+            "servizio": "Prodotto/servizio",
+            "settore": "Settore",
+            "sito_web": "Sito web",
+            "obiettivi_commerciali": "Obiettivo aziendale",
+        }
+        additions = []
+        already = goal_text.lower()
+        for field, label in labels.items():
+            fact = facts.get(field)
+            value = str((fact or {}).get("value") or "").strip()
+            if value and value.lower() not in already:
+                additions.append(f"{label}: {value}.")
+        if additions:
+            goal_text = f"{goal_text.strip()} {' '.join(additions)}".strip()
+
+    is_reexamination = bool(clarification and clarification.get("answers"))
+    if is_reexamination:
+        goal_text = augment_goal_text(
+            goal_text,
+            clarification.get("missing_information") or [],
+            clarification.get("answers") or [],
+        )
+
+    prep = prepare_brain_session(goal_text, session_id=session_id, is_reexamination=is_reexamination)
     sid = prep["session_id"]
     selection: SelectionResult = prep["selection"]
     audit_event_ids: list[str] = list(prep["audit_event_ids"])
@@ -254,7 +365,8 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
     })
     store.update_session(sid, goal_id=goal_id)
 
-    res = await m2_engine.create_plan(db, org_id, user_id, goal_id, goal_text)  # invariato
+    task_specs = _brain_task_specs(selection.detected_intents)
+    res = await m2_engine.create_plan(db, org_id, user_id, goal_id, goal_text, task_specs=task_specs)
     if res.get("requires_clarification") or not res.get("plan"):
         _log(EVENT_CLARIFICATION_REQUIRED, actor=_ACTOR_SERVICE, decision="NEEDS_CLARIFICATION",
              reason="Il planner M2 non ha potuto costruire un piano dal testo dell'obiettivo.",
@@ -343,12 +455,93 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
             "goal_context": ctx.come_dict(),
             "brain": brain_trace,
             "active_agent_ids": selection.activeAgentIds,
+            "plan_generation": PLAN_GENERATION_TAG,
         }},
     )
 
     plan["goal_context"] = ctx.come_dict()
     plan["brain"] = brain_trace
     plan["active_agent_ids"] = selection.activeAgentIds
+    plan["plan_generation"] = PLAN_GENERATION_TAG
+
+    # Capability REALE 'video_reel' (agents/agent_map.py): UN SOLO piano, mai
+    # un secondo percorso. M2 resta dichiaratamente solo-simulazione (mai
+    # generatore di contenuto reale), quindi questo task NON passa da
+    # m2.planner.decompose(): e' aggiunto qui come task aggiuntivo dello
+    # STESSO piano, con un deliverable_override che punta a un progetto reale
+    # gia' creato/grounded sul Fact Ledger da domains/reel.py (nessun secondo
+    # motore di generazione, nessuna euristica di contesto duplicata). Il
+    # contenuto vero (sceneggiatura, storyboard, video) si genera e si
+    # approva nel laboratorio Reel (vedi skills.py: reel_text_requesty /
+    # reel_video_runway); qui il task M2 e' solo un riferimento tracciabile,
+    # approvabile e visibile come qualunque altro task del piano.
+    reel_project = None
+    if "video_reel" in selection.detected_intents:
+        pseudo_user = {"id": user_id, "email": None, "organization_id": org_id}
+        try:
+            reel_project = await reel_domain.create_project(reel_domain.NewReelBody(brief=goal_text), pseudo_user)
+        except HTTPException as exc:
+            _log(EVENT_ERROR_FALLBACK, actor=_ACTOR_SERVICE, decision="FALLBACK_M2_DEFAULT",
+                 reason=f"Task 'video_reel' non aggiunto al piano: {exc.detail}",
+                 goal_id=goal_id, plan_id=plan["id"], metadata={"detail": exc.detail})
+        else:
+            reel_mapping = mapping_by_capability("video_reel")
+            ultimo = await db.tasks.find({"plan_id": plan["id"]}).sort("seq", -1).to_list(1)
+            seq = (ultimo[0]["seq"] + 1) if ultimo else 1
+            reel_task = new_task(
+                org_id, user_id, plan["id"], goal_id, plan["version"], seq,
+                name="Reel — testo e video", agent_id=reel_mapping.frontend_agent_id if reel_mapping else "video-creator",
+                deliverable_type="video_reel_project",
+                inputs={"cost": 0.0, "deliverable_override": {
+                    "reel_project_id": reel_project["id"], "mode": "REALE",
+                    "note": "Genera e approva il contenuto in Reel — laboratorio.",
+                }},
+                depends_on=[],
+            )
+            await db.tasks.insert_one(reel_task)
+            await db.plans.update_one({"id": plan["id"]}, {"$push": {
+                "dag.nodes": reel_task["id"], "topo_order": reel_task["id"],
+            }})
+            _log(EVENT_PLAN_ALLOWED, actor=_ACTOR_SERVICE, decision="VIDEO_REEL_TASK_LINKED",
+                 reason="Task 'video_reel_project' aggiunto al piano M2, collegato al progetto reale in domains/reel.py.",
+                 goal_id=goal_id, plan_id=plan["id"],
+                 metadata={"task_id": reel_task["id"], "reel_project_id": reel_project["id"]})
+
+    # Stesso pattern, capability REALE 'flyer_image' (Creative/Graphic
+    # Designer): seconda prova della stessa architettura multimodale, mai un
+    # secondo motore. Vedi domains/flyer.py.
+    flyer_project = None
+    if "flyer_image" in selection.detected_intents:
+        pseudo_user = {"id": user_id, "email": None, "organization_id": org_id}
+        try:
+            flyer_project = await flyer_domain.create_project(flyer_domain.NewFlyerBody(brief=goal_text), pseudo_user)
+        except HTTPException as exc:
+            _log(EVENT_ERROR_FALLBACK, actor=_ACTOR_SERVICE, decision="FALLBACK_M2_DEFAULT",
+                 reason=f"Task 'flyer_image' non aggiunto al piano: {exc.detail}",
+                 goal_id=goal_id, plan_id=plan["id"], metadata={"detail": exc.detail})
+        else:
+            flyer_mapping = mapping_by_capability("flyer_image")
+            ultimo = await db.tasks.find({"plan_id": plan["id"]}).sort("seq", -1).to_list(1)
+            seq = (ultimo[0]["seq"] + 1) if ultimo else 1
+            flyer_task = new_task(
+                org_id, user_id, plan["id"], goal_id, plan["version"], seq,
+                name="Flyer — copy e immagine", agent_id=flyer_mapping.frontend_agent_id if flyer_mapping else "creative-designer",
+                deliverable_type="flyer_project",
+                inputs={"cost": 0.0, "deliverable_override": {
+                    "flyer_project_id": flyer_project["id"], "mode": "REALE",
+                    "note": "Genera e approva il contenuto in Flyer — laboratorio.",
+                }},
+                depends_on=[],
+            )
+            await db.tasks.insert_one(flyer_task)
+            await db.plans.update_one({"id": plan["id"]}, {"$push": {
+                "dag.nodes": flyer_task["id"], "topo_order": flyer_task["id"],
+            }})
+            _log(EVENT_PLAN_ALLOWED, actor=_ACTOR_SERVICE, decision="FLYER_TASK_LINKED",
+                 reason="Task 'flyer_project' aggiunto al piano M2, collegato al progetto reale in domains/flyer.py.",
+                 goal_id=goal_id, plan_id=plan["id"],
+                 metadata={"task_id": flyer_task["id"], "flyer_project_id": flyer_project["id"]})
+
     tasks = await db.tasks.find({"plan_id": plan["id"]}, {"_id": 0}).sort("seq", 1).to_list(200)
 
     for task_id, dtype in overrides.items():
@@ -369,7 +562,7 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
     payload = _selection_payload(selection)
     payload.update({
         "plan": plan, "tasks": tasks, "requires_clarification": False,
-        "brain_trace": brain_trace,
+        "brain_trace": brain_trace, "reel_project": reel_project, "flyer_project": flyer_project,
         "session_id": sid, "audit_event_ids": audit_event_ids,
         "session_state": store.get_session(sid),
     })

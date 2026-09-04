@@ -5,7 +5,7 @@ import { PageHeader, Card, Empty } from "@/components/Primitives";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldCheck, ScanSearch } from "lucide-react";
+import { ArrowLeft, ShieldCheck, ScanSearch, Presentation } from "lucide-react";
 
 export default function PlanDetail() {
   const { id } = useParams();
@@ -76,6 +76,12 @@ export default function PlanDetail() {
         subtitle={`Versione v${plan.version} · modalità SIMULAZIONE · una sola esecuzione per versione`}
         actions={
           <div className="flex items-center gap-2 flex-wrap">
+            {plan.active_agent_ids?.length > 0 && (
+              <button data-testid="plan-sala-riunioni-btn" onClick={() => navigate(`/sala-riunioni?planId=${plan.id}`)}
+                className="flex items-center gap-1.5 border border-border rounded-sm px-3 py-1.5 text-sm hover:bg-muted/50 active:scale-[0.98] transition-colors">
+                <Presentation className="w-3.5 h-3.5" /> Sala riunioni
+              </button>
+            )}
             {canApprove && <button data-testid="approve-plan-btn" onClick={approvePlan} disabled={busy}
               className="bg-emerald-600 text-white rounded-sm px-3 py-1.5 text-sm font-medium hover:bg-emerald-500 active:scale-[0.98] disabled:opacity-50 transition-colors">Approva piano</button>}
             {canRun && <button data-testid="tick-btn" onClick={tick} disabled={busy}

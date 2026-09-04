@@ -10,7 +10,15 @@ _OBJECTIVE_RULES = [
     ("REPORT", ["report", "kpi", "analisi delle performance", "analisi performance", "risultati"]),
     ("LEAD_GEN", ["lead generation", "lead gen", "lead", "prospect", "sdr", "outreach", "acquisizione clienti"]),
     ("CAMPAGNA", ["campagna", "lancio", "advertising", " adv", "ads", "sponsorizza", "inserzion"]),
-    ("CONTENUTO", ["piano editoriale", "calendario editoriale", "editoriale", "post", "social", "contenut"]),
+    # CONTENUTO: contenuti organici (non a pagamento). Oltre alle formulazioni esplicite
+    # ("piano editoriale", "post", "social"...), riconosce anche i formati/le piattaforme
+    # social piu' comuni citati da soli (es. "crea un reel per Instagram"), cosi' che una
+    # richiesta di contenuto non venga classificata AMBIGUO solo perche' non usa la parola
+    # "social" o "post" esplicitamente. Controllata DOPO CAMPAGNA: "campagna ... instagram"
+    # resta CAMPAGNA, non CONTENUTO (ordine di priorita' invariato).
+    ("CONTENUTO", ["piano editoriale", "calendario editoriale", "editoriale", "post", "social", "contenut",
+                   "reel", "instagram", "facebook", "tiktok", "storie", "stories", "carosello",
+                   "flyer", "volantino", "locandina", "manifesto", "banner"]),
     ("STRATEGIA", ["strategia", "posizionamento", "go-to-market", "gtm", "piano marketing"]),
     ("EMAIL", ["email", "e-mail", "mail"]),
 ]

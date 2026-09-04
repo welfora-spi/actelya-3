@@ -42,6 +42,30 @@ const MAP = {
   info: "bg-slate-500/15 text-slate-300 border-slate-500/30",
   warning: "bg-yellow-500/15 text-yellow-400 border-yellow-500/30",
   high: "bg-red-500/15 text-red-400 border-red-500/30",
+  // reel (agente marketing, Requesty reale + video Runway reale)
+  GENERAZIONE_IN_CORSO: "bg-blue-500/15 text-blue-400 border-blue-500/30 animate-pulse",
+  PROGETTO_PRONTO: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  ESITO_INCERTO: "bg-red-500/15 text-red-400 border-red-500/30 animate-pulse",
+  IN_GENERAZIONE: "bg-blue-500/15 text-blue-400 border-blue-500/30 animate-pulse",
+  VIDEO_PRONTO: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  FALLITO: "bg-red-500/15 text-red-400 border-red-500/30",
+  NON_RICHIESTO: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+  NON_VERIFICATO: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+  CONTESTATO: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  OK: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  // brain: esito di POST /brain/plans
+  READY: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  NEEDS_CLARIFICATION: "bg-violet-500/15 text-violet-400 border-violet-500/30",
+  UNSUPPORTED: "bg-zinc-600/15 text-zinc-400 border-zinc-600/30",
+  BLOCKED_RISK: "bg-red-500/15 text-red-400 border-red-500/30",
+  // Social Media Manager: domains/social_publishing.py (PublishingPackage)
+  AWAITING_APPROVAL: "bg-violet-500/15 text-violet-400 border-violet-500/30",
+  APPROVED: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  SCHEDULED: "bg-teal-500/15 text-teal-400 border-teal-500/30",
+  PUBLISHING: "bg-blue-500/15 text-blue-400 border-blue-500/30 animate-pulse",
+  PUBLISHED: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  CANCELLED: "bg-zinc-600/15 text-zinc-400 border-zinc-600/30 line-through",
+  FAILED: "bg-red-500/15 text-red-400 border-red-500/30",
 };
 
 export function StatusBadge({ status, className, testid }) {

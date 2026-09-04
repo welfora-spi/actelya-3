@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Users2 } from "lucide-react";
 import RoomShell from "@/components/meeting-room/RoomShell";
 import RoomBackdrop from "@/components/meeting-room/RoomBackdrop";
@@ -7,8 +8,10 @@ import RequestBar from "@/components/meeting-room/RequestBar";
 import CollaboratorPanel from "@/components/meeting-room/CollaboratorPanel";
 import { Card } from "@/components/Primitives";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { useMeetingRoomData, TEAM_MODES } from "@/components/meeting-room/adapter";
+import { useMeetingRoomData, useMeetingRoomDataFromPlan, TEAM_MODES } from "@/components/meeting-room/adapter";
 import { cn } from "@/lib/utils";
+
+const EMPTY_ROOM_DATA = { objective: "", seats: [], activeAgentIds: [], deliverables: [] };
 
 const TEAM_MODE_OPTIONS = [
   { value: TEAM_MODES.RICHIESTA, label: "Squadra richiesta" },
@@ -31,8 +34,19 @@ function useIsDesktop() {
 }
 
 export default function SalaRiunioni() {
+  const [searchParams] = useSearchParams();
+  const planId = searchParams.get("planId");
+  const usingRealPlan = Boolean(planId);
+
   const [teamMode, setTeamMode] = useState(TEAM_MODES.RICHIESTA);
-  const { objective, seats, activeAgentIds, deliverables } = useMeetingRoomData(teamMode);
+  const [refetchToken, setRefetchToken] = useState(0);
+  const demoData = useMeetingRoomData(teamMode);
+  const realPlan = useMeetingRoomDataFromPlan(planId, refetchToken);
+
+  const { objective, seats, activeAgentIds, deliverables, planStatus, estimate, tasksCount } = usingRealPlan
+    ? (realPlan.data || EMPTY_ROOM_DATA)
+    : demoData;
+
   const [selectedId, setSelectedId] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const isDesktop = useIsDesktop();
@@ -50,6 +64,9 @@ export default function SalaRiunioni() {
     collaboratorsCount: seats.filter((s) => s.kind === "collaborator").length,
     activeCount: seats.filter((s) => s.kind === "collaborator" && s.status === "AL_LAVORO").length,
     pendingApprovalCount: deliverables.filter((d) => d.status === "IN_APPROVAZIONE").length,
+    tasksCount: tasksCount ?? null,
+    planStatus: usingRealPlan ? (planStatus ?? null) : null,
+    estimatedCost: estimate?.cost_probable ?? null,
   };
 
   const selectSeat = (seat) => {
@@ -71,28 +88,36 @@ export default function SalaRiunioni() {
               Obiettivo attuale
             </div>
             <h1 className="font-display text-base sm:text-lg font-semibold tracking-tight truncate" data-testid="meeting-objective">
-              {objective}
+              {usingRealPlan && realPlan.loading ? "Caricamento piano…" : objective}
             </h1>
           </div>
 
-          <div className="inline-flex items-center rounded-full border border-border/60 bg-card p-0.5 shrink-0" data-testid="team-mode-toggle">
-            {TEAM_MODE_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                data-testid={`team-mode-${opt.value}`}
-                onClick={() => changeTeamMode(opt.value)}
-                aria-pressed={teamMode === opt.value}
-                className={cn(
-                  "px-3 py-1 text-xs font-medium rounded-full transition-colors duration-200",
-                  teamMode === opt.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          {!usingRealPlan && (
+            <div className="inline-flex items-center rounded-full border border-border/60 bg-card p-0.5 shrink-0" data-testid="team-mode-toggle">
+              {TEAM_MODE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  data-testid={`team-mode-${opt.value}`}
+                  onClick={() => changeTeamMode(opt.value)}
+                  aria-pressed={teamMode === opt.value}
+                  className={cn(
+                    "px-3 py-1 text-xs font-medium rounded-full transition-colors duration-200",
+                    teamMode === opt.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+
+        {usingRealPlan && realPlan.error && (
+          <div data-testid="sala-riunioni-plan-error" className="mb-3 text-sm border border-red-500/30 bg-red-500/10 text-red-400 rounded-sm px-3 py-2">
+            Impossibile caricare il piano richiesto. Riprova o torna ai piani.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3 lg:flex-1 lg:min-h-0">
           <div className="min-w-0 flex flex-col gap-3 lg:min-h-0">
@@ -122,7 +147,8 @@ export default function SalaRiunioni() {
           <div className="hidden lg:flex lg:flex-col lg:min-h-0">
             <Card className="flex-1 min-h-0 flex flex-col overflow-hidden">
               <div className="flex-1 min-h-0 overflow-y-auto">
-                <CollaboratorPanel collaborator={selectedCollaborator} summary={summary} />
+                <CollaboratorPanel collaborator={selectedCollaborator} summary={summary}
+                  planId={usingRealPlan ? planId : null} onActionDone={() => setRefetchToken((t) => t + 1)} />
               </div>
             </Card>
           </div>
@@ -134,7 +160,8 @@ export default function SalaRiunioni() {
           <SheetHeader className="sr-only">
             <SheetTitle>Collaboratore selezionato</SheetTitle>
           </SheetHeader>
-          <CollaboratorPanel collaborator={selectedCollaborator} summary={summary} />
+          <CollaboratorPanel collaborator={selectedCollaborator} summary={summary}
+            planId={usingRealPlan ? planId : null} onActionDone={() => setRefetchToken((t) => t + 1)} />
         </SheetContent>
       </Sheet>
     </RoomShell>

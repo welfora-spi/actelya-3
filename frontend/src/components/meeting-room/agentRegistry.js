@@ -67,6 +67,22 @@ export const AGENT_REGISTRY = [
     z_index: 1,
   },
   {
+    // Postazione visiva CONDIVISA con "specialista-nurturing" (capability
+    // 'nurturing' non e' oggi mai eseguibile -- UNAVAILABLE, vedi
+    // brain/agents/agent_map.py -- quindi i due agenti non risultano MAI
+    // entrambi attivi sulla stessa richiesta): riuso deliberato in attesa di
+    // un asset/posizione calibrati appositamente (nessuna ricalibrazione del
+    // layout in questa fase). Vedi GET /brain/agents per la fonte canonica
+    // backend di id/ruolo/capability/skill.
+    agent_id: "video-creator",
+    role_name: "Video creator (Reel)",
+    short_label: "Video creator",
+    person_asset: null,
+    label_position: { top: "25.14%", left: "38.44%" },
+    seat_id: "left-5",
+    z_index: 1,
+  },
+  {
     agent_id: "analista-performance",
     role_name: "Analista performance",
     short_label: "Performance",
@@ -80,6 +96,19 @@ export const AGENT_REGISTRY = [
     role_name: "Appointment setter",
     short_label: "Appointment setter",
     person_asset: null, // import personAppointmentSetter from "@/assets/meeting-room/layers/person-appointment-setter.webp"
+    label_position: { top: "33.84%", left: "70.86%" },
+    seat_id: "right-2",
+    z_index: 5,
+  },
+  {
+    // Postazione visiva CONDIVISA con "appointment-setter" (capability
+    // 'appointments' e' UNAVAILABLE, mai selezionata: nessuna coincidenza
+    // possibile) -- stesso compromesso deliberato di "video-creator" sopra,
+    // in attesa di un asset/posizione calibrati appositamente.
+    agent_id: "creative-designer",
+    role_name: "Creative/Graphic Designer",
+    short_label: "Creative designer",
+    person_asset: null,
     label_position: { top: "33.84%", left: "70.86%" },
     seat_id: "right-2",
     z_index: 5,

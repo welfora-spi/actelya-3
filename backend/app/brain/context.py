@@ -16,7 +16,6 @@ specifico."""
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import asdict, dataclass, field
 
 _CANALI_NOTI = [
@@ -24,15 +23,45 @@ _CANALI_NOTI = [
     "Google Ads", "Meta Ads", "Blog", "Newsletter", "Email", "WhatsApp", "Pinterest",
 ]
 
+# Campo etichettato esplicito ("Azienda:", "Brand:", "Azienda/brand:"): ha
+# sempre priorita' sui pattern euristici sotto, perche' e' una dichiarazione
+# diretta invece di un'inferenza da linguaggio naturale. Generico per
+# costruzione: cattura qualunque testo dopo l'etichetta, nessun nome fisso.
+_PATTERN_AZIENDA_LABEL = re.compile(
+    r"(?:azienda\s*/\s*brand|azienda|brand)\s*[:\-]\s*([^\n,.;]+)", re.IGNORECASE
+)
+_PATTERN_PRODOTTO_LABEL = re.compile(
+    r"prodott[oi](?:\s*/\s*servizi[oe])?\s*[:\-]\s*([^\n,.;]+)", re.IGNORECASE
+)
+
 _PATTERN_AZIENDA_LOCALITA = re.compile(
     r"(?:del|dei|della|dello|di)\s+([A-Z][\w&'\-]*(?:\s+(?:[A-Z][\w&'\-]*|and|e|&))*)"
     r"\s+di\s+([A-Z][\wàèéìòùÀ-Ù]+)"
 )
 _PATTERN_AZIENDA_SEMPLICE = re.compile(r"(?:del|dei|della|dello)\s+([A-Z][\w&'\-]*(?:\s+[A-Z][\w&'\-]*)*)")
 _PATTERN_LOCALITA_SEMPLICE = re.compile(r"\bdi\s+([A-Z][\wàèéìòù]+)\b")
+# Prima versione: richiedeva SEMPRE una clausola "del/della/di" dopo il
+# prodotto (es. "le focaccine DEL Bakery & Coffee"). Non catturava mai un
+# prodotto seguito da un riferimento temporale invece che dal nome
+# dell'azienda -- esattamente il caso "promuovere le focaccine QUESTO
+# WEEKEND" (nessun "del/della/di" dopo "focaccine"): il prodotto restava
+# indefinito e veniva chiesto di nuovo anche se gia' scritto per intero
+# nella frase. Corretto con un lookahead che ferma la cattura, oltre alla
+# clausola "del/...", anche davanti a un riferimento temporale comune
+# (questo/prossimo/per + giorno della settimana/oggi/domani/entro/durante)
+# o a fine frase/stringa -- mai includendo la data nel nome del prodotto.
 _PATTERN_PRODOTTO = re.compile(
-    r"(?:pubblicizzare|promuovere|vendere|lanciare|far conoscere)\s+(?:le|il|i|gli|la|l')?\s*"
-    r"([a-zàèéìòù][\wàèéìòù\s]+?)\s+(?:del|dei|della|dello|di)\s",
+    r"(?:pubblicizz\w*|promuov\w*|vend\w*|lanc\w*|far\s+conoscere)\s+(?:le|il|i|gli|la|l')?\s*"
+    r"([a-zàèéìòù][\wàèéìòù\s]*?)"
+    r"(?=\s+(?:del|dei|della|dello|di)\b"
+    r"|\s+(?:questo|quest['’]|prossim\w*|entro|durante|oggi|domani)\b"
+    r"|\s+per\s+(?:sabato|domenica|luned[ìi]|marted[ìi]|mercoled[ìi]|gioved[ìi]|venerd[ìi]|il\s+weekend|questo\s+weekend)\b"
+    r"|[.,;!?]|$)",
+    re.IGNORECASE,
+)
+_PATTERN_PRODOTTO_DESTINAZIONE = re.compile(
+    r"(?:campagna|reel|video|contenut[oi]|pubblicit[aà])[^\n,.;]*?\s+per\s+"
+    r"([\wàèéìòùÀ-Ù&'\-]+(?:\s+[\wàèéìòùÀ-Ù&'\-]+){0,5})\s*$",
     re.IGNORECASE,
 )
 _PATTERN_PUBBLICO = re.compile(
@@ -82,21 +111,35 @@ def extract_goal_context(goal_text: str) -> GoalContext:
     testo = goal_text or ""
     ctx = GoalContext()
 
+    ma_label = _PATTERN_AZIENDA_LABEL.search(testo)
+    if ma_label:
+        ctx.azienda = ma_label.group(1).strip()
+
     m = _PATTERN_AZIENDA_LOCALITA.search(testo)
     if m:
-        ctx.azienda = m.group(1).strip()
+        if not ctx.azienda:
+            ctx.azienda = m.group(1).strip()
         ctx.localita = m.group(2).strip()
     else:
-        ma = _PATTERN_AZIENDA_SEMPLICE.search(testo)
-        if ma:
-            ctx.azienda = ma.group(1).strip()
+        if not ctx.azienda:
+            ma = _PATTERN_AZIENDA_SEMPLICE.search(testo)
+            if ma:
+                ctx.azienda = ma.group(1).strip()
         ml = _PATTERN_LOCALITA_SEMPLICE.search(testo)
         if ml and ml.group(1) != ctx.azienda:
             ctx.localita = ml.group(1).strip()
 
-    mp = _PATTERN_PRODOTTO.search(testo)
-    if mp:
-        ctx.prodotto = mp.group(1).strip()
+    mp_label = _PATTERN_PRODOTTO_LABEL.search(testo)
+    if mp_label:
+        ctx.prodotto = mp_label.group(1).strip()
+    else:
+        mp = _PATTERN_PRODOTTO.search(testo)
+        if mp:
+            ctx.prodotto = mp.group(1).strip()
+        else:
+            mp_dest = _PATTERN_PRODOTTO_DESTINAZIONE.search(testo.strip())
+            if mp_dest:
+                ctx.prodotto = mp_dest.group(1).strip()
 
     mpub = _PATTERN_PUBBLICO.search(testo)
     if mpub:
@@ -121,3 +164,34 @@ def extract_goal_context(goal_text: str) -> GoalContext:
             ctx.questions.append(_DOMANDE[campo])
 
     return ctx
+
+
+# Etichetta usata per ricomponere una risposta di chiarimento in un campo
+# che extract_goal_context() sa riconoscere (vedi _PATTERN_*_LABEL sopra):
+# stessa sintassi in entrambe le direzioni, cosi' rispondere "ACTELYA 3" alla
+# domanda sull'azienda produce un testo che l'estrazione rilegge subito come
+# azienda, per qualunque nome, senza logica dedicata.
+_LABEL_PER_CAMPO = {"azienda": "Azienda/brand", "prodotto": "Prodotto/servizio"}
+
+
+def augment_goal_text(original_text: str, missing_information: list, answers: list) -> str:
+    """Ricostruisce il testo dell'obiettivo aggiungendo le risposte
+    dell'utente alle domande di chiarimento, senza scartare nulla del testo
+    originale. Quando la domanda risposta corrisponde a un campo noto
+    (azienda/prodotto) usa l'etichetta esplicita in modo che l'estrazione la
+    rilegga in modo affidabile; altrimenti aggiunge la risposta come
+    frase libera (utile per le domande generiche tipo "che tipo di
+    contenuto vuoi?", pensate per far emergere una capability, non un
+    campo di contesto)."""
+    parti = [(original_text or "").strip()]
+    for i, risposta in enumerate(answers or []):
+        risposta = (risposta or "").strip()
+        if not risposta:
+            continue
+        campo = missing_information[i] if i < len(missing_information or []) else None
+        etichetta = _LABEL_PER_CAMPO.get(campo)
+        if etichetta:
+            parti.append(f"{etichetta}: {risposta}.")
+        else:
+            parti.append(risposta if risposta.endswith((".", "!", "?")) else f"{risposta}.")
+    return " ".join(p for p in parti if p)

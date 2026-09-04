@@ -8,13 +8,15 @@ from app.config import (ADMIN_EMAIL, ADMIN_PASSWORD, FRONTEND_URL, DEFAULT_ORG_I
 from app.db import db, client
 from app.security import hash_password, verify_password, vault_available
 from app.models import now_iso
-from app.domains import auth, org, users_mgmt, connections, engine, approvals, settings, budget, stats
+from app.domains import (auth, org, users_mgmt, connections, engine, approvals, settings, budget, stats,
+                         tenant, onboarding, knowledge, discovery, reel, video_connections, flyer,
+                         social_publishing, meta_connections)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("actelya")
 
-app = FastAPI(title="ACTELYA 2 API", version="0.1.0",
+app = FastAPI(title="ACTELYA 3 API", version="0.1.0",
               description="Sistema operativo AI per marketing e vendite. Milestone 1 (SIMULAZIONE).")
 
 api_router = APIRouter(prefix="/api")
@@ -22,7 +24,7 @@ api_router = APIRouter(prefix="/api")
 
 @api_router.get("/")
 async def root():
-    return {"app": "ACTELYA 2", "milestone": 1, "mode_default": "SIMULAZIONE"}
+    return {"app": "ACTELYA 3", "milestone": 1, "mode_default": "SIMULAZIONE"}
 
 
 @api_router.get("/health")
@@ -30,8 +32,11 @@ async def health():
     return {"status": "ok", "vault": vault_available()}
 
 
-for module in (auth, org, users_mgmt, connections, engine, approvals, settings, budget, stats):
+for module in (auth, org, users_mgmt, connections, engine, approvals, settings, budget, stats,
+              tenant, onboarding, knowledge, discovery, reel, video_connections, flyer,
+              social_publishing, meta_connections):
     api_router.include_router(module.router)
+api_router.include_router(meta_connections.status_router)
 
 from app.m2 import engine as m2_engine
 api_router.include_router(m2_engine.router)
@@ -63,6 +68,41 @@ async def startup():
     await db.goals.create_index("id", unique=True)
     await db.approvals.create_index("id", unique=True)
     await db.audit_logs.create_index("at")
+    await db.organizations.create_index("id", unique=True)
+
+    # Company knowledge (registration, onboarding, Fact Ledger, Discovery) — additive.
+    await db.facts.create_index("id", unique=True)
+    await db.facts.create_index([("organization_id", 1), ("field", 1), ("state", 1)])
+    await db.discovery_runs.create_index("id", unique=True)
+    await db.discovery_runs.create_index([("organization_id", 1), ("status", 1)])
+
+    # Reel agent (Requesty reale + video Runway reale) — indici additivi, non distruttivi.
+    await db.reel_projects.create_index("id", unique=True)
+    await db.reel_projects.create_index([("organization_id", 1), ("status", 1)])
+    await db.reel_video_jobs.create_index("id", unique=True)
+    await db.reel_video_jobs.create_index([("reel_project_id", 1), ("version", 1)], unique=True)
+    await db.video_connections.create_index("id", unique=True)
+    await db.video_connections.create_index([("organization_id", 1), ("provider_type", 1)])
+    await db.flyer_projects.create_index("id", unique=True)
+    await db.flyer_projects.create_index([("organization_id", 1), ("status", 1)])
+    await db.flyer_media_assets.create_index("id", unique=True)
+    await db.flyer_media_assets.create_index([("organization_id", 1), ("flyer_project_id", 1)])
+    await db.reel_content_versions.create_index("id", unique=True)
+    await db.reel_content_versions.create_index([("reel_project_id", 1), ("version", 1)], unique=True)
+    await db.flyer_content_versions.create_index("id", unique=True)
+    await db.flyer_content_versions.create_index([("flyer_project_id", 1), ("version", 1)], unique=True)
+
+    # Social Media Manager — memoria persistente e pubblicazione (indici additivi).
+    await db.social_memory_entries.create_index("id", unique=True)
+    await db.social_memory_entries.create_index([("organization_id", 1), ("type", 1), ("created_at", -1)])
+    await db.social_publishing_packages.create_index("id", unique=True)
+    await db.social_publishing_packages.create_index([("organization_id", 1), ("status", 1)])
+    await db.social_publishing_packages.create_index([("status", 1), ("scheduled_at", 1)])
+    await db.social_analytics_snapshots.create_index("id", unique=True)
+    await db.social_analytics_snapshots.create_index([("publishing_package_id", 1), ("created_at", -1)])
+    await db.social_analytics_snapshots.create_index([("organization_id", 1), ("source_kind", 1)])
+    await db.meta_connections.create_index("id", unique=True)
+    await db.meta_connections.create_index([("organization_id", 1), ("active", 1)])
 
     # Milestone 2 (SIMULAZIONE) — indici additivi, non distruttivi
     from app.m2.models import create_m2_indexes
@@ -110,9 +150,24 @@ async def startup():
     await engine.recover_on_startup()
     engine.start_worker()
 
+    await discovery.recover_on_startup()
+    discovery.start_worker()
+
     # Milestone 2 — recovery idempotente protetto da lock (leader election)
     await m2_engine.recover_m2(db)
-    logger.info("ACTELYA 2 avviato.")
+
+    # Social Media Manager — recovery + scheduler pubblicazioni (item 15/21: resiste a un riavvio del backend)
+    await social_publishing.recover_on_startup()
+    social_publishing.start_scheduler_worker()
+    # Adapter reale Meta: la sola registrazione non abilita nulla da sola
+    # (servono ANCHE REAL_EXTERNAL_ACTIONS + CONNECTOR_MODE='real' + una
+    # connessione Meta configurata e verificata per l'organizzazione, vedi
+    # domains/social_publishing.py::_meta_readiness) — ma senza di essa il
+    # percorso reale resterebbe irraggiungibile anche a tutto il resto
+    # correttamente configurato.
+    social_publishing.register_meta_adapters()
+
+    logger.info("ACTELYA 3 avviato.")
 
 
 @app.on_event("shutdown")

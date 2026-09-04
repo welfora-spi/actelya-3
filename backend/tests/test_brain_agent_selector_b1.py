@@ -8,6 +8,7 @@ import pytest
 from app.brain.agents.agent_map import (
     AGENT_MAPPINGS,
     EXECUTION_MODE_M2,
+    EXECUTION_MODE_REAL,
     EXECUTION_MODE_UNAVAILABLE,
     mapping_by_capability,
 )
@@ -66,7 +67,7 @@ def test_review_compliance_e_m2_ma_senza_deliverable_type_proprio():
 def test_ogni_mapping_ha_i_campi_obbligatori():
     for m in AGENT_MAPPINGS:
         assert isinstance(m.execution_ready, bool)
-        assert m.execution_mode in (EXECUTION_MODE_M2, "BRAIN_SIMULATION", EXECUTION_MODE_UNAVAILABLE)
+        assert m.execution_mode in (EXECUTION_MODE_M2, "BRAIN_SIMULATION", EXECUTION_MODE_UNAVAILABLE, EXECUTION_MODE_REAL)
         if m.execution_mode != EXECUTION_MODE_M2:
             assert m.implementation_note, f"implementation_note mancante per '{m.capability}'"
 

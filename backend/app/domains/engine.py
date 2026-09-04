@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..db import db
-from ..deps import get_current_user, require_roles
+from ..deps import get_current_user, require_roles, assert_same_org
 from ..audit import log_audit
 from ..models import now_iso, base_record, new_id
 from ..config import DEFAULT_ORG_ID
@@ -30,15 +30,16 @@ class GoalBody(BaseModel):
 async def create_goal(body: GoalBody, user: dict = Depends(get_current_user)):
     if not body.text or not body.text.strip():
         raise HTTPException(status_code=400, detail="Obiettivo vuoto")
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
 
-    settings = await db.settings.find_one({"id": DEFAULT_ORG_ID}) or {}
+    settings = await db.settings.find_one({"id": org_id}) or {}
     ai_real = settings.get("ai_real_mode", False)
 
     intent = classify_intent(body.text, ai_real_mode=ai_real)
     agent_ids = select_agents_for_goal(intent["intent_type"])
     estimate = estimate_for_agents(agent_ids, AGENT_REGISTRY)
 
-    goal = base_record(DEFAULT_ORG_ID, user["id"])
+    goal = base_record(org_id, user["id"])
     goal.update({
         "id": new_id("goal"), "text": body.text.strip(), "intent": intent,
         "agents": agent_ids, "estimate": estimate, "status": "IN_APPROVAZIONE",
@@ -49,7 +50,7 @@ async def create_goal(body: GoalBody, user: dict = Depends(get_current_user)):
 
     risks = list(intent["risk_flags"])
     external_actions = ["Invio email a destinatari reali"] if intent["requires_external_action"] else []
-    approval = base_record(DEFAULT_ORG_ID, user["id"])
+    approval = base_record(org_id, user["id"])
     approval.update({
         "id": new_id("appr"), "type": "PREVENTIVO", "goal_id": goal["id"],
         "title": "Preventivo esecuzione obiettivo",
@@ -67,7 +68,7 @@ async def create_goal(body: GoalBody, user: dict = Depends(get_current_user)):
     await db.approvals.insert_one(approval)
     await db.goals.update_one({"id": goal["id"]}, {"$set": {"approval_id": approval["id"]}})
 
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="CREATE_GOAL",
+    await log_audit(org_id=org_id, user=user, action="CREATE_GOAL",
                     entity_type="goal", entity_id=goal["id"],
                     details={"intent": intent["intent_type"], "risk_flags": risks})
 
@@ -78,15 +79,15 @@ async def create_goal(body: GoalBody, user: dict = Depends(get_current_user)):
 
 @router.get("/goals")
 async def list_goals(user: dict = Depends(get_current_user)):
-    rows = await db.goals.find({"organization_id": DEFAULT_ORG_ID}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    rows = await db.goals.find({"organization_id": org_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return rows
 
 
 @router.get("/goals/{goal_id}")
 async def get_goal(goal_id: str, user: dict = Depends(get_current_user)):
     g = await db.goals.find_one({"id": goal_id}, {"_id": 0})
-    if not g:
-        raise HTTPException(status_code=404, detail="Obiettivo non trovato")
+    assert_same_org(g, user, "Obiettivo non trovato")
     return g
 
 
@@ -96,8 +97,9 @@ async def create_execution_from_approval(approval: dict, user: dict) -> dict:
     goal = await db.goals.find_one({"id": approval["goal_id"]})
     if not goal:
         raise HTTPException(status_code=404, detail="Obiettivo collegato non trovato")
+    org_id = goal.get("organization_id") or DEFAULT_ORG_ID
 
-    execution = base_record(DEFAULT_ORG_ID, user["id"])
+    execution = base_record(org_id, user["id"])
     execution.update({
         "id": new_id("exec"), "goal_id": goal["id"], "approval_id": approval["id"],
         "agents": goal["agents"], "estimate": goal["estimate"],
@@ -119,7 +121,7 @@ async def create_execution_from_approval(approval: dict, user: dict) -> dict:
                               {"$set": {"execution_id": execution["id"], "status": "APPROVATO"}})
     await db.approvals.update_one({"id": approval["id"]},
                                   {"$set": {"execution_id": execution["id"]}})
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="CREATE_EXECUTION",
+    await log_audit(org_id=org_id, user=user, action="CREATE_EXECUTION",
                     entity_type="execution", entity_id=execution["id"],
                     details={"goal_id": goal["id"], "approval_id": approval["id"]})
     execution.pop("_id", None)
@@ -129,15 +131,15 @@ async def create_execution_from_approval(approval: dict, user: dict) -> dict:
 # ---------------- Execution queries ----------------
 @router.get("/executions")
 async def list_executions(user: dict = Depends(get_current_user)):
-    rows = await db.executions.find({"organization_id": DEFAULT_ORG_ID}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    rows = await db.executions.find({"organization_id": org_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return rows
 
 
 @router.get("/executions/{execution_id}")
 async def get_execution(execution_id: str, user: dict = Depends(get_current_user)):
     e = await db.executions.find_one({"id": execution_id}, {"_id": 0})
-    if not e:
-        raise HTTPException(status_code=404, detail="Esecuzione non trovata")
+    assert_same_org(e, user, "Esecuzione non trovata")
     deliverable = None
     if e.get("deliverable_id"):
         deliverable = await db.deliverables.find_one({"id": e["deliverable_id"]}, {"_id": 0})
@@ -176,7 +178,8 @@ async def process_execution(execution: dict):
     if not claimed:
         return  # already claimed/processed elsewhere
 
-    org_profile = await db.organizations.find_one({"id": DEFAULT_ORG_ID}, {"_id": 0}) or {}
+    org_id = execution.get("organization_id") or DEFAULT_ORG_ID
+    org_profile = await db.organizations.find_one({"id": org_id}, {"_id": 0}) or {}
     goal_text = execution.get("goal_text", "")
     done_ids = {r["agent_id"] for r in execution.get("agent_runs", []) if r.get("confirmed")}
     runs = list(execution.get("agent_runs", []))
@@ -217,7 +220,7 @@ async def process_execution(execution: dict):
             validation = validate_email_deliverable(deliverable_payload)
             deliverable_status = validation["status"]
             warnings.extend(validation["warnings"])
-            drec = base_record(DEFAULT_ORG_ID, execution["created_by"])
+            drec = base_record(org_id, execution["created_by"])
             drec.update({
                 "id": new_id("deliv"), "execution_id": ex_id, "goal_id": execution["goal_id"],
                 "type": "email", "content": deliverable_payload, "status": deliverable_status,
@@ -239,7 +242,7 @@ async def process_execution(execution: dict):
             action_status = "BLOCCATA"
             missing = prereq["missing"]
             # Create a separate approval request for the external action (stays pending/blocked).
-            ext_appr = base_record(DEFAULT_ORG_ID, execution["created_by"])
+            ext_appr = base_record(org_id, execution["created_by"])
             ext_appr.update({
                 "id": new_id("appr"), "type": "AZIONE_ESTERNA", "goal_id": execution["goal_id"],
                 "title": "Autorizzazione azione esterna (invio email)",
@@ -272,7 +275,7 @@ async def process_execution(execution: dict):
             }},
         )
         await db.goals.update_one({"id": execution["goal_id"]}, {"$set": {"status": "ESEGUITO"}})
-        await log_audit(org_id=DEFAULT_ORG_ID, user={"email": "system"}, action="EXECUTION_COMPLETED",
+        await log_audit(org_id=org_id, user={"email": "system"}, action="EXECUTION_COMPLETED",
                         entity_type="execution", entity_id=ex_id,
                         details={"deliverable_status": deliverable_status, "action_status": action_status,
                                  "real_cost": real_cost, "tokens_input": tok_in, "tokens_output": tok_out})
@@ -283,7 +286,7 @@ async def process_execution(execution: dict):
             {"$set": {"execution_status": "FALLITA", "error": "Errore interno sanificato",
                       "finished_at": now_iso(), "updated_at": now_iso()}},
         )
-        await log_audit(org_id=DEFAULT_ORG_ID, user={"email": "system"}, action="EXECUTION_FAILED",
+        await log_audit(org_id=org_id, user={"email": "system"}, action="EXECUTION_FAILED",
                         entity_type="execution", entity_id=ex_id, status="ERROR",
                         reason="Errore interno sanificato")
 

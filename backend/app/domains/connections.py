@@ -4,11 +4,12 @@ from typing import Optional
 import time
 
 from ..db import db
-from ..deps import get_current_user, require_roles, rate_limit
+from ..deps import get_current_user, require_roles, rate_limit, assert_same_org
 from ..audit import log_audit
 from ..security import encrypt_secret, mask_secret, vault_available
 from ..models import now_iso, base_record, new_id, touch
 from ..config import DEFAULT_ORG_ID
+from ..integrations import requesty_secrets, requesty_gateway
 
 router = APIRouter(prefix="/connections", tags=["connections"])
 
@@ -40,13 +41,23 @@ class AIConnectionBody(BaseModel):
 
 
 def _public_conn(c: dict) -> dict:
+    # Requesty: la credenziale vive SOLO nel Credential Manager di Windows (mai in
+    # Mongo, vedi app/integrations/requesty_secrets.py) -- e' un'unica credenziale
+    # condivisa da processo/PC, non per-connessione: se piu' righe "requesty"
+    # esistono, riflettono tutte lo stesso stato reale (mai un valore inventato).
+    if c["provider_type"] == "requesty":
+        api_key_masked = requesty_secrets.requesty_api_key_mascherata() or ""
+        has_key = requesty_secrets.requesty_configurata()
+    else:
+        api_key_masked = c.get("api_key_masked", "")
+        has_key = bool(c.get("api_key_encrypted"))
     return {
         "id": c["id"],
         "name": c["name"],
         "provider_type": c["provider_type"],
         "base_url": c.get("base_url", ""),
-        "api_key_masked": c.get("api_key_masked", ""),
-        "has_key": bool(c.get("api_key_encrypted")),
+        "api_key_masked": api_key_masked,
+        "has_key": has_key,
         "logical_model": c.get("logical_model", ""),
         "effective_model": c.get("effective_model", ""),
         "timeout": c.get("timeout", 60),
@@ -65,17 +76,19 @@ def _public_conn(c: dict) -> dict:
 # ---------- AI Providers ----------
 @router.get("/ai")
 async def list_ai(user: dict = Depends(get_current_user)):
-    rows = await db.ai_connections.find({"organization_id": DEFAULT_ORG_ID}, {"_id": 0}).to_list(100)
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    rows = await db.ai_connections.find({"organization_id": org_id}, {"_id": 0}).to_list(100)
     return [_public_conn(c) for c in rows]
 
 
 @router.post("/ai")
 async def create_ai(body: AIConnectionBody, user: dict = Depends(require_roles("ADMIN"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     if body.provider_type not in PROVIDER_TYPES:
         raise HTTPException(status_code=400, detail="Tipo provider non supportato")
-    if body.api_key and not vault_available():
+    if body.api_key and body.provider_type != "requesty" and not vault_available():
         raise HTTPException(status_code=503, detail="MASTER_KEY non configurata: impossibile salvare segreti in modo sicuro.")
-    rec = base_record(DEFAULT_ORG_ID, user["id"])
+    rec = base_record(org_id, user["id"])
     rec.update({
         "id": new_id("aiconn"), "name": body.name, "provider_type": body.provider_type,
         "base_url": body.base_url, "logical_model": body.logical_model,
@@ -86,10 +99,14 @@ async def create_ai(body: AIConnectionBody, user: dict = Depends(require_roles("
         "verified": False, "api_key_encrypted": None, "api_key_masked": "",
     })
     if body.api_key:
-        rec["api_key_encrypted"] = encrypt_secret(body.api_key)
-        rec["api_key_masked"] = mask_secret(body.api_key)
+        if body.provider_type == "requesty":
+            # Credential Manager di Windows, MAI Mongo (vedi app/integrations/requesty_secrets.py).
+            requesty_secrets.salva_api_key_requesty(body.api_key)
+        else:
+            rec["api_key_encrypted"] = encrypt_secret(body.api_key)
+            rec["api_key_masked"] = mask_secret(body.api_key)
     await db.ai_connections.insert_one(rec)
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="CREATE_AI_CONNECTION",
+    await log_audit(org_id=org_id, user=user, action="CREATE_AI_CONNECTION",
                     entity_type="ai_connection", entity_id=rec["id"],
                     details={"name": body.name, "provider_type": body.provider_type})
     return _public_conn(rec)
@@ -97,21 +114,24 @@ async def create_ai(body: AIConnectionBody, user: dict = Depends(require_roles("
 
 @router.put("/ai/{conn_id}")
 async def update_ai(conn_id: str, body: AIConnectionBody, user: dict = Depends(require_roles("ADMIN"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     c = await db.ai_connections.find_one({"id": conn_id})
-    if not c:
-        raise HTTPException(status_code=404, detail="Connessione non trovata")
+    assert_same_org(c, user, "Connessione non trovata")
     data = body.model_dump()
     api_key = data.pop("api_key", None)
     c.update(data)
     c["verified"] = False  # config changed -> must re-test
     if api_key:
-        if not vault_available():
-            raise HTTPException(status_code=503, detail="MASTER_KEY non configurata.")
-        c["api_key_encrypted"] = encrypt_secret(api_key)
-        c["api_key_masked"] = mask_secret(api_key)
+        if c["provider_type"] == "requesty":
+            requesty_secrets.salva_api_key_requesty(api_key)
+        else:
+            if not vault_available():
+                raise HTTPException(status_code=503, detail="MASTER_KEY non configurata.")
+            c["api_key_encrypted"] = encrypt_secret(api_key)
+            c["api_key_masked"] = mask_secret(api_key)
     touch(c, user["id"], "Aggiornata connessione AI")
     await db.ai_connections.replace_one({"id": conn_id}, c)
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="UPDATE_AI_CONNECTION",
+    await log_audit(org_id=org_id, user=user, action="UPDATE_AI_CONNECTION",
                     entity_type="ai_connection", entity_id=conn_id,
                     details={"api_key_changed": bool(api_key)})
     return _public_conn(c)
@@ -119,11 +139,11 @@ async def update_ai(conn_id: str, body: AIConnectionBody, user: dict = Depends(r
 
 @router.delete("/ai/{conn_id}")
 async def delete_ai(conn_id: str, user: dict = Depends(require_roles("ADMIN"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     c = await db.ai_connections.find_one({"id": conn_id})
-    if not c:
-        raise HTTPException(status_code=404, detail="Connessione non trovata")
+    assert_same_org(c, user, "Connessione non trovata")
     await db.ai_connections.delete_one({"id": conn_id})
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="DELETE_AI_CONNECTION",
+    await log_audit(org_id=org_id, user=user, action="DELETE_AI_CONNECTION",
                     entity_type="ai_connection", entity_id=conn_id)
     return {"ok": True}
 
@@ -132,8 +152,7 @@ async def delete_ai(conn_id: str, user: dict = Depends(require_roles("ADMIN"))):
 async def test_preview(conn_id: str, user: dict = Depends(require_roles("ADMIN"))):
     """Step 1: show provider, model and possible cost. No call is made."""
     c = await db.ai_connections.find_one({"id": conn_id}, {"_id": 0})
-    if not c:
-        raise HTTPException(status_code=404, detail="Connessione non trovata")
+    assert_same_org(c, user, "Connessione non trovata")
     est_tokens = 40
     possible_cost = round(est_tokens * 0.000002, 6)
     return {
@@ -154,12 +173,12 @@ class TestConfirmBody(BaseModel):
 @router.post("/ai/{conn_id}/test-confirm")
 async def test_confirm(conn_id: str, body: TestConfirmBody, user: dict = Depends(require_roles("ADMIN"))):
     """Step 2: single minimal call. SIMULATED in this milestone (no real network call)."""
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     rate_limit(f"testconn:{conn_id}", max_calls=5, window_seconds=60)
     if not body.confirm:
         raise HTTPException(status_code=400, detail="Conferma esplicita richiesta")
     c = await db.ai_connections.find_one({"id": conn_id})
-    if not c:
-        raise HTTPException(status_code=404, detail="Connessione non trovata")
+    assert_same_org(c, user, "Connessione non trovata")
 
     t0 = time.time()
     # SIMULATED single minimal call — no real provider call in milestone 1.
@@ -179,17 +198,59 @@ async def test_confirm(conn_id: str, body: TestConfirmBody, user: dict = Depends
                   "provider_returned_model": effective, "verified": True,
                   "updated_at": now_iso()}},
     )
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="TEST_AI_CONNECTION",
+    await log_audit(org_id=org_id, user=user, action="TEST_AI_CONNECTION",
                     entity_type="ai_connection", entity_id=conn_id,
                     details={"result": "OK_SIMULATO", "cost": cost, "latency_ms": latency_ms})
     return result
 
 
+@router.post("/ai/{conn_id}/test-real")
+async def test_real(conn_id: str, body: TestConfirmBody, user: dict = Depends(require_roles("ADMIN"))):
+    """Unica eccezione dichiarata: una singola chiamata REALE verso Requesty (mai
+    verso altri provider in questa fase), a costo minimo, mai automatica -- richiede
+    sempre conferma esplicita del chiamante (body.confirm=True). Nessuna credenziale
+    ne' traceback grezzo arrivano mai in questa risposta; nessuna eccezione grezza
+    e' mai loggata (vedi app/integrations/requesty_gateway.py)."""
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    rate_limit(f"testconn_real:{conn_id}", max_calls=5, window_seconds=60)
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="Conferma esplicita richiesta")
+    c = await db.ai_connections.find_one({"id": conn_id})
+    assert_same_org(c, user, "Connessione non trovata")
+    if c["provider_type"] != "requesty":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Test REALE per '{c['provider_type']}' non disponibile in questa fase: solo Requesty e' collegato.",
+        )
+    model_id = (c.get("effective_model") or "").strip()
+    if not model_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Nessun 'modello effettivo' configurato su questa connessione: impostalo prima di testare.",
+        )
+
+    risultato = requesty_gateway.test_diagnostico(model_id)
+    now_verified = risultato.esito == "OK"
+    await db.ai_connections.update_one(
+        {"id": conn_id},
+        {"$set": {"last_test_at": now_iso(), "last_test_result": "OK_REALE" if now_verified else f"ERRORE_{risultato.codice_errore}",
+                  "provider_returned_model": risultato.modello_effettivo,
+                  "verified": now_verified, "updated_at": now_iso()}},
+    )
+    await log_audit(org_id=org_id, user=user, action="TEST_AI_CONNECTION_REAL",
+                    entity_type="ai_connection", entity_id=conn_id,
+                    details={"esito": risultato.esito, "codice_errore": risultato.codice_errore,
+                             "latenza_ms": risultato.latenza_ms, "input_tokens": risultato.input_tokens,
+                             "output_tokens": risultato.output_tokens, "modello_effettivo": risultato.modello_effettivo})
+    return {"mode": "REALE", **risultato.come_dict()}
+
+
 # ---------- Integrations (predisposed, not operative) ----------
 @router.get("/integrations")
 async def list_integrations(user: dict = Depends(get_current_user)):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     existing = {i["key"]: i for i in await db.integrations.find(
-        {"organization_id": DEFAULT_ORG_ID}, {"_id": 0}).to_list(100)}
+        {"organization_id": org_id}, {"_id": 0}).to_list(100)}
     out = []
     for key, label in INTEGRATION_CATALOG:
         row = existing.get(key, {"key": key, "status": "NON_CONFIGURATA"})
@@ -210,6 +271,7 @@ class IntegrationStatusBody(BaseModel):
 @router.put("/integrations/{key}")
 async def set_integration_status(key: str, body: IntegrationStatusBody,
                                  user: dict = Depends(require_roles("ADMIN"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
     valid_keys = {k for k, _ in INTEGRATION_CATALOG}
     if key not in valid_keys:
         raise HTTPException(status_code=404, detail="Integrazione sconosciuta")
@@ -219,15 +281,15 @@ async def set_integration_status(key: str, body: IntegrationStatusBody,
     # Only allow toggling between NON_CONFIGURATA / DISATTIVATA in milestone 1
     if body.status not in ("NON_CONFIGURATA", "DISATTIVATA"):
         raise HTTPException(status_code=400, detail="Integrazione non ancora collegata: stato non impostabile in questa milestone.")
-    existing = await db.integrations.find_one({"organization_id": DEFAULT_ORG_ID, "key": key})
+    existing = await db.integrations.find_one({"organization_id": org_id, "key": key})
     if existing:
         touch(existing, user["id"], f"Stato integrazione -> {body.status}")
         existing["status"] = body.status
         await db.integrations.replace_one({"_id": existing["_id"]}, existing)
     else:
-        rec = base_record(DEFAULT_ORG_ID, user["id"])
+        rec = base_record(org_id, user["id"])
         rec.update({"key": key, "status": body.status})
         await db.integrations.insert_one(rec)
-    await log_audit(org_id=DEFAULT_ORG_ID, user=user, action="UPDATE_INTEGRATION_STATUS",
+    await log_audit(org_id=org_id, user=user, action="UPDATE_INTEGRATION_STATUS",
                     entity_type="integration", entity_id=key, details={"status": body.status})
     return {"key": key, "status": body.status}

@@ -27,7 +27,7 @@ import pytest
 from app.brain import service as SVC
 from app.brain.audit.memory_audit import EVENT_RESULT_READY_FOR_APPROVAL, get_audit_log
 from app.brain.memory.session import get_session_store
-from app.brain.planning.handoff import HANDOFF_READY, HANDOFF_WAITING_DEPENDENCY
+from app.brain.planning.handoff import HANDOFF_READY
 
 
 class _NetworkCallAttempted(Exception):
@@ -181,19 +181,28 @@ def test_sessione_dopo_la_creazione_e_plan_created():
     assert res["session_state"]["plan_id"] == res["plan"]["id"]
 
 
-def test_handoff_iniziali_sono_waiting_dependency():
+def test_nessuna_dipendenza_forzata_tra_le_capability_selezionate():
+    """AGGIORNATA (DECISIONE UFFICIALE, item #6): il piano non passa più da
+    m2.planner.decompose() (che per un obiettivo CAMPAGNA incatenava
+    editorial_plan -> marketing_strategy ecc. per costruzione, indipendente
+    dalla selezione del brain), ma da task_specs costruiti ESATTAMENTE dalle
+    capability rilevate dal brain (brain/service.py::_brain_task_specs),
+    ciascuna un task indipendente — l'ordine 'campagna completa' era
+    un'inferenza di M2 sul solo testo, non una decisione del brain (vedi
+    m2/engine.py::create_plan, param task_specs). Per l'obiettivo focaccine
+    (strategia + piano editoriale + post, nessuna dipendenza dichiarata dal
+    brain) non esiste quindi più alcun handoff da calcolare: è il
+    comportamento corretto, non un piano incompleto — ciascun task resta
+    approvabile ed eseguibile per conto proprio."""
     async def scenario():
         db = _FakeDB()
         return await SVC.create_plan_with_brain(db, "org-test", "user-test", FOCACCINE_GOAL)
 
     res = run(scenario())
-    # Il piano CAMPAGNA per l'obiettivo focaccine ha task dipendenti
-    # (editorial_plan dipende da marketing_strategy, ecc.): almeno un
-    # handoff deve essere stato calcolato.
-    handoffs = res["session_state"]["handoffs"]
-    assert handoffs
-    assert all(h["status"] == HANDOFF_WAITING_DEPENDENCY for h in handoffs)
-    assert res.get("handoff_status") == HANDOFF_WAITING_DEPENDENCY or res.get("handoff_status") == "WAITING_DEPENDENCY"
+    assert res["requires_clarification"] is False
+    assert len(res["tasks"]) >= 2  # più capability rilevate, ciascuna il proprio task
+    assert res["session_state"]["handoffs"] == []
+    assert res.get("handoff_status") is None
 
 
 # ==================== mark_result_ready_for_approval: condizioni mancanti ====================
