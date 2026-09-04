@@ -16,7 +16,7 @@ from app.m2.agents_registry import assert_action_allowed, ContractError
 
 def _db():
     client = AsyncIOMotorClient("mongodb://localhost:27017")
-    return client, client["actelya2_db"]
+    return client, client["actelya3_test"]
 
 
 def run(coro):

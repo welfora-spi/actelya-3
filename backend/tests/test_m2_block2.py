@@ -97,7 +97,7 @@ def test_email_single_task_plan():
 # ---------------- Fix fallback swap_current_version ----------------
 async def _swap_fallback_scenario():
     client = AsyncIOMotorClient("mongodb://localhost:27017")
-    db = client["actelya2_db"]
+    db = client["actelya3_test"]
     await db.plans.delete_many({"goal_id": "G_SWAP_TEST"})
     await db.plans.insert_one({"id": "pv1", "goal_id": "G_SWAP_TEST", "version": 1, "is_current": True})
     await db.plans.insert_one({"id": "pv2", "goal_id": "G_SWAP_TEST", "version": 2, "is_current": False})
@@ -129,7 +129,7 @@ def test_swap_fallback_restores_previous_current():
 def test_swap_success_moves_current():
     async def scenario():
         client = AsyncIOMotorClient("mongodb://localhost:27017")
-        db = client["actelya2_db"]
+        db = client["actelya3_test"]
         await db.plans.delete_many({"goal_id": "G_SWAP_OK"})
         await db.plans.insert_one({"id": "pa", "goal_id": "G_SWAP_OK", "version": 1, "is_current": True})
         await db.plans.insert_one({"id": "pb", "goal_id": "G_SWAP_OK", "version": 2, "is_current": False})

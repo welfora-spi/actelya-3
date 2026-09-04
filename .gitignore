@@ -57,7 +57,18 @@ coverage/
 # ===== Cookies / tokens captured during testing =====
 cookies.txt
 *.cookie
-.env.*
 credentials.json
 .credentials
 frontend/node_modules/.cache/default-development/0.pack
+
+# Keep sanitized configuration templates versioned (real values remain ignored above).
+!**/.env.example
+
+# Additional local databases, archives and generated media
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+*.backup
+local-data/
+uploads/

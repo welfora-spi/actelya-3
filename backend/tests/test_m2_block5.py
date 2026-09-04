@@ -13,7 +13,7 @@ from app.m2 import deliverables as D
 
 def _db():
     client = AsyncIOMotorClient("mongodb://localhost:27017")
-    return client, client["actelya2_db"]
+    return client, client["actelya3_test"]
 
 
 def run(coro):

@@ -1,4 +1,6 @@
-# ACTELYA 2 — Progetto tecnico Milestone 2 (SIMULAZIONE) — IN ATTESA DI APPROVAZIONE
+# ACTELYA 3 — Progetto tecnico storico Milestone 2 (SIMULAZIONE)
+
+> Documento storico del percorso M2, oggi implementato. Per lo stato corrente e il lavoro residuo vedere `../PRD.md`.
 
 Stato: PROPOSTA. Nessun codice implementato. Compatibile con M1. Release v0.1.0-milestone1 invariata.
 

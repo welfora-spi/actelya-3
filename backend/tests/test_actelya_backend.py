@@ -1,4 +1,4 @@
-"""ACTELYA 2 backend regression tests - Milestone 1 SIMULAZIONE"""
+"""ACTELYA 3 backend regression tests - legacy Milestone 1 flow in SIMULAZIONE."""
 import os
 import time
 import uuid
@@ -11,7 +11,7 @@ from conftest import BASE_URL as BASE, ADMIN_EMAIL, ADMIN_TEST_PASSWORD as ADMIN
 
 def _clear_lockout():
     try:
-        MongoClient("mongodb://localhost:27017")["actelya2_db"].login_attempts.delete_many({})
+        MongoClient("mongodb://localhost:27017")["actelya3_test"].login_attempts.delete_many({})
     except Exception:
         pass
 

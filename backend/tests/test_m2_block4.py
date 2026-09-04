@@ -14,7 +14,7 @@ from app.m2 import engine as E
 
 def _db():
     client = AsyncIOMotorClient("mongodb://localhost:27017")
-    return client, client["actelya2_db"]
+    return client, client["actelya3_test"]
 
 
 async def _cleanup(db, org):
