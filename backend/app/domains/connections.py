@@ -9,11 +9,12 @@ from ..audit import log_audit
 from ..security import encrypt_secret, mask_secret, vault_available
 from ..models import now_iso, base_record, new_id, touch
 from ..config import DEFAULT_ORG_ID
-from ..integrations import requesty_secrets, requesty_gateway
+from ..integrations import requesty_secrets
+from ..brain import llm_gateway
 
 router = APIRouter(prefix="/connections", tags=["connections"])
 
-PROVIDER_TYPES = ["requesty", "anthropic", "openai", "openai_compatible"]
+PROVIDER_TYPES = ["requesty", "anthropic", "openai", "openai_compatible", "gemini"]
 
 INTEGRATION_CATALOG = [
     ("email_smtp", "Email / SMTP"), ("microsoft365", "Microsoft 365"),
@@ -206,21 +207,24 @@ async def test_confirm(conn_id: str, body: TestConfirmBody, user: dict = Depends
 
 @router.post("/ai/{conn_id}/test-real")
 async def test_real(conn_id: str, body: TestConfirmBody, user: dict = Depends(require_roles("ADMIN"))):
-    """Unica eccezione dichiarata: una singola chiamata REALE verso Requesty (mai
-    verso altri provider in questa fase), a costo minimo, mai automatica -- richiede
-    sempre conferma esplicita del chiamante (body.confirm=True). Nessuna credenziale
-    ne' traceback grezzo arrivano mai in questa risposta; nessuna eccezione grezza
-    e' mai loggata (vedi app/integrations/requesty_gateway.py)."""
+    """Una singola chiamata REALE a costo minimo, mai automatica -- richiede
+    sempre conferma esplicita del chiamante (body.confirm=True). Esteso a
+    QUALUNQUE provider registrato in brain/llm_gateway.py (non solo
+    Requesty): la credenziale si risolve qui (keyring per Requesty,
+    api_key_encrypted per gli altri, mai in chiaro), la chiamata vera passa
+    sempre dall'adapter comune — nessuna credenziale ne' traceback grezzo
+    arrivano mai in questa risposta; nessuna eccezione grezza e' mai
+    loggata (vedi app/brain/llm_gateway.py)."""
     org_id = user.get("organization_id") or DEFAULT_ORG_ID
     rate_limit(f"testconn_real:{conn_id}", max_calls=5, window_seconds=60)
     if not body.confirm:
         raise HTTPException(status_code=400, detail="Conferma esplicita richiesta")
     c = await db.ai_connections.find_one({"id": conn_id})
     assert_same_org(c, user, "Connessione non trovata")
-    if c["provider_type"] != "requesty":
+    if llm_gateway.get_adapter(c["provider_type"]) is None:
         raise HTTPException(
             status_code=400,
-            detail=f"Test REALE per '{c['provider_type']}' non disponibile in questa fase: solo Requesty e' collegato.",
+            detail=f"Test REALE per '{c['provider_type']}' non disponibile: nessun adapter registrato.",
         )
     model_id = (c.get("effective_model") or "").strip()
     if not model_id:
@@ -229,20 +233,33 @@ async def test_real(conn_id: str, body: TestConfirmBody, user: dict = Depends(re
             detail="Nessun 'modello effettivo' configurato su questa connessione: impostalo prima di testare.",
         )
 
-    risultato = requesty_gateway.test_diagnostico(model_id)
-    now_verified = risultato.esito == "OK"
+    if c["provider_type"] == "requesty":
+        api_key = "keyring" if requesty_secrets.requesty_configurata() else None
+    elif c.get("api_key_encrypted"):
+        from ..security import decrypt_secret, SecretVaultError
+        try:
+            api_key = decrypt_secret(c["api_key_encrypted"])
+        except SecretVaultError:
+            api_key = None
+    else:
+        api_key = None
+
+    risultato = llm_gateway.diagnostic_test(
+        c["provider_type"], api_key, model_id, base_url=c.get("base_url") or None,
+    )
+    now_verified = risultato["esito"] == "OK"
     await db.ai_connections.update_one(
         {"id": conn_id},
-        {"$set": {"last_test_at": now_iso(), "last_test_result": "OK_REALE" if now_verified else f"ERRORE_{risultato.codice_errore}",
-                  "provider_returned_model": risultato.modello_effettivo,
+        {"$set": {"last_test_at": now_iso(), "last_test_result": "OK_REALE" if now_verified else f"ERRORE_{risultato['codice_errore']}",
+                  "provider_returned_model": risultato["modello_effettivo"],
                   "verified": now_verified, "updated_at": now_iso()}},
     )
     await log_audit(org_id=org_id, user=user, action="TEST_AI_CONNECTION_REAL",
                     entity_type="ai_connection", entity_id=conn_id,
-                    details={"esito": risultato.esito, "codice_errore": risultato.codice_errore,
-                             "latenza_ms": risultato.latenza_ms, "input_tokens": risultato.input_tokens,
-                             "output_tokens": risultato.output_tokens, "modello_effettivo": risultato.modello_effettivo})
-    return {"mode": "REALE", **risultato.come_dict()}
+                    details={"esito": risultato["esito"], "codice_errore": risultato["codice_errore"],
+                             "latenza_ms": risultato["latenza_ms"], "input_tokens": risultato["input_tokens"],
+                             "output_tokens": risultato["output_tokens"], "modello_effettivo": risultato["modello_effettivo"]})
+    return {"mode": "REALE", **risultato}
 
 
 # ---------- Integrations (predisposed, not operative) ----------

@@ -14,8 +14,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from app.config import DB_NAME
 from app.domains import connections
+from app.integrations import requesty_gateway as rg
 from app.integrations import requesty_secrets
-from app.integrations.requesty_gateway import RisultatoTestRequesty
+from app.integrations.requesty_gateway import RequestyErroreSanificato, RisultatoGenerazioneRequesty
 
 
 def run(coro):
@@ -101,9 +102,33 @@ def test_test_real_richiede_conferma_esplicita():
     run(_scenario(scenario))
 
 
-def test_test_real_rifiuta_provider_diverso_da_requesty():
+def test_test_real_provider_diverso_da_requesty_ora_supportato_ma_senza_credenziale_da_errore_sanificato():
+    """CEO Agent 100% reale (blocco 2): test-real non e' piu' limitato a
+    Requesty (llm_gateway.py registra anche openai/anthropic/gemini). Una
+    connessione openai SENZA credenziale non produce piu' un HTTP 400: la
+    chiamata parte, l'adapter la rifiuta con un errore sanificato
+    ('non_configurato'), restituito come esito normale (mai un'eccezione),
+    esattamente come per Requesty."""
     async def scenario(fresh_db, org_id):
         conn = await connections.create_ai(_new_conn_body(provider_type="openai", api_key=None), _admin(org_id))
+        result = await connections.test_real(conn["id"], connections.TestConfirmBody(confirm=True), _admin(org_id))
+        assert result["esito"] == "ERRORE"
+        assert result["codice_errore"] == "non_configurato"
+        updated = await fresh_db.ai_connections.find_one({"id": conn["id"]})
+        assert updated["verified"] is False
+
+    run(_scenario(scenario))
+
+
+def test_test_real_rifiuta_provider_senza_adapter_registrato():
+    async def scenario(fresh_db, org_id):
+        conn = await connections.create_ai(_new_conn_body(provider_type="openai_compatible", api_key=None), _admin(org_id))
+        # 'openai_compatible' HA un adapter (stesso protocollo di OpenAI):
+        # per testare davvero il rifiuto serve un provider_type valido ma
+        # senza adapter registrato -- forziamo il campo direttamente su Mongo,
+        # una situazione che l'endpoint deve gestire senza sollevare un'
+        # eccezione non gestita.
+        await fresh_db.ai_connections.update_one({"id": conn["id"]}, {"$set": {"provider_type": "provider-mai-registrato"}})
         with pytest.raises(Exception) as ei:
             await connections.test_real(conn["id"], connections.TestConfirmBody(confirm=True), _admin(org_id))
         assert getattr(ei.value, "status_code", None) == 400
@@ -122,10 +147,17 @@ def test_test_real_richiede_modello_effettivo():
 
 
 def test_test_real_ok_aggiorna_verified_e_audit_senza_segreti(monkeypatch):
-    esito_ok = RisultatoTestRequesty(esito="OK", codice_errore=None, messaggio="Connessione riuscita.",
-                                     modello_effettivo="anthropic/claude-sonnet-4-5", latenza_ms=120,
-                                     input_tokens=5, output_tokens=2)
-    monkeypatch.setattr(connections.requesty_gateway, "test_diagnostico", lambda model_id: esito_ok)
+    """CEO Agent 100% reale (blocco 2): test_real() ora passa da
+    llm_gateway.diagnostic_test() -> RequestyAdapter -> requesty_gateway.
+    genera_json() (mai piu' da requesty_gateway.test_diagnostico(), che
+    questo endpoint non chiama piu'): il doppio di test va sul NUOVO punto
+    di ingresso reale, altrimenti il mock non ha alcun effetto e la
+    chiamata vera parte per davvero verso Requesty (bug osservato e
+    corretto qui: mai piu' un test che invoca silenziosamente un provider
+    reale)."""
+    esito_ok = RisultatoGenerazioneRequesty(testo='{"ok": true}', modello_effettivo="anthropic/claude-sonnet-4-5",
+                                            latenza_ms=120, input_tokens=5, output_tokens=2, troncata=False)
+    monkeypatch.setattr(rg, "genera_json", lambda **kwargs: esito_ok)
 
     async def scenario(fresh_db, org_id):
         conn = await connections.create_ai(_new_conn_body(), _admin(org_id))
@@ -143,10 +175,9 @@ def test_test_real_ok_aggiorna_verified_e_audit_senza_segreti(monkeypatch):
 
 
 def test_test_real_errore_non_marca_verified(monkeypatch):
-    esito_ko = RisultatoTestRequesty(esito="ERRORE", codice_errore="autenticazione",
-                                     messaggio="Credenziale Requesty non valida o rifiutata.",
-                                     modello_effettivo=None, latenza_ms=50, input_tokens=None, output_tokens=None)
-    monkeypatch.setattr(connections.requesty_gateway, "test_diagnostico", lambda model_id: esito_ko)
+    def _raise(**kwargs):
+        raise RequestyErroreSanificato("autenticazione", "Credenziale Requesty non valida o rifiutata.")
+    monkeypatch.setattr(rg, "genera_json", _raise)
 
     async def scenario(fresh_db, org_id):
         # Come in ACTELYA v1: un test diagnostico fallito NON e' un errore del

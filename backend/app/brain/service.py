@@ -57,16 +57,21 @@ from .agents.agent_map import COORDINATOR_FRONTEND_ID, mapping_by_capability
 from .audit.memory_audit import (
     EVENT_AGENT_EXCLUDED,
     EVENT_AGENT_SELECTED,
+    EVENT_BUDGET_CLARIFICATION_REQUIRED,
     EVENT_CLARIFICATION_REQUIRED,
     EVENT_ERROR_FALLBACK,
     EVENT_EXTERNAL_ACTION_BLOCKED,
     EVENT_HANDOFF_READY,
     EVENT_HANDOFF_REJECTED,
     EVENT_HANDOFF_WAITING,
+    EVENT_LLM_CORRECTION_APPLIED,
+    EVENT_LLM_PROPOSAL_RECEIVED,
+    EVENT_LLM_PROPOSAL_UNAVAILABLE,
     EVENT_PLAN_ALLOWED,
     EVENT_PLAN_BLOCKED,
     EVENT_REQUEST_RECEIVED,
     EVENT_RESULT_READY_FOR_APPROVAL,
+    EVENT_RISK_ESCALATED_BY_LLM,
     EVENT_TRIAGE_COMPLETED,
     get_audit_log,
 )
@@ -81,9 +86,14 @@ from .planning.agent_selector import (
     STATUS_NEEDS_CLARIFICATION,
     STATUS_READY,
     SelectionResult,
+    detect_capabilities,
+    precheck_risk_and_domain,
     select_agents,
 )
 from .planning.handoff import HANDOFF_READY, collect_task_handoffs
+from . import llm_understanding
+from .llm_validator import validate_and_normalize
+from .risk_registry import AZIONE_APPROVAL, AZIONE_BLOCK, AZIONE_CLARIFICATION, AZIONE_REVIEW_TASK
 from .producers import produce_brain_deliverable
 from ..domains.knowledge import current_facts_map
 from ..domains import reel as reel_domain
@@ -92,6 +102,52 @@ from fastapi import HTTPException
 
 _ACTOR_SELECTOR = "brain.planning.agent_selector"
 _ACTOR_SERVICE = "brain.service"
+
+
+# ==================== Persistenza (CEO Agent 100% reale) ====================
+# audit/memory_audit.py e memory/session.py restano PURI (nessun db, vedi le
+# loro docstring): la persistenza avviene qui, al livello di orchestrazione,
+# dove db/org_id sono gia' disponibili. Idempotente per costruzione (upsert
+# per event_id/session_id): richiamabile piu' volte sullo stesso stato senza
+# duplicare nulla. Mai un'eccezione qui che interrompa la risposta reale
+# all'utente: un fallimento di persistenza resta un "best effort" silenzioso
+# (coerente con lo stesso principio gia' usato per l'arricchimento Fact
+# Ledger poco sotto — 'fake DB minimali dei test legacy' non devono rompere
+# nulla)."""
+async def _persist_audit_events(db, org_id: str, audit_log, session_id: str) -> None:
+    if db is None:
+        return
+    try:
+        eventi = audit_log.filter(session_id=session_id)
+        for ev in eventi:
+            await db.brain_audit_events.update_one(
+                {"event_id": ev["event_id"]},
+                {"$set": {**ev, "organization_id": org_id}},
+                upsert=True,
+            )
+    except (AttributeError, TypeError):
+        pass  # fake DB minimali dei test legacy: persistenza best-effort, mai bloccante
+
+
+async def _persist_session_snapshot(db, org_id: str, store, session_id: str) -> None:
+    if db is None:
+        return
+    try:
+        snap = store.get_session(session_id)
+        if snap is None:
+            return
+        await db.brain_sessions.update_one(
+            {"session_id": session_id},
+            {"$set": {**snap, "organization_id": org_id}},
+            upsert=True,
+        )
+    except (AttributeError, TypeError):
+        pass
+
+
+async def _persist_all(db, org_id: str, store, audit_log, session_id: str) -> None:
+    await _persist_audit_events(db, org_id, audit_log, session_id)
+    await _persist_session_snapshot(db, org_id, store, session_id)
 
 # Item #10 (DECISIONE UFFICIALE) — marcatore additivo, MAI retroattivo: un
 # piano creato PRIMA della correzione item #6 (M2 costruiva i task dalla
@@ -123,25 +179,62 @@ _M2_NATIVE_DELIVERABLE = {
 }
 
 
-def _brain_task_specs(detected_intents: list) -> list:
+def _brain_task_specs(detected_intents: list, *, task_proposti_validati: Optional[list] = None) -> list:
     """Costruisce gli SpecTask M2 (stessa forma di planner.decompose():
     {key, name, deliverable_type, depends_on}) ESCLUSIVAMENTE dalle capability che
-    il brain ha realmente selezionato per questo obiettivo — mai dalla
-    classificazione testuale indipendente di M2 (planner.classify_objective +
-    decompose), che ignorerebbe la squadra convocata e potrebbe aggiungere task
-    estranei (es. l'intera campagna quando e' stato chiesto solo un flyer).
-    Nessuna dipendenza forzata tra i task: l'ordine 'campagna completa'
-    (strategia -> editoriale -> social -> ads -> kpi) era un'inferenza di M2
-    sul solo testo, non una decisione del brain — qui ogni capability
-    selezionata resta un task indipendente, approvabile ed eseguibile da solo."""
+    il brain ha realmente selezionato per questo obiettivo (detected_intents,
+    gia' filtrate da select_agents() — mai una capability inesistente o non
+    operativa) — mai dalla classificazione testuale indipendente di M2
+    (planner.classify_objective + decompose), che ignorerebbe la squadra
+    convocata e potrebbe aggiungere task estranei.
+
+    task_proposti_validati (CEO Agent 100% reale, correzione architetturale):
+    quando presente (llm_validator.NormalizedCeoPlan.task_proposti_validati,
+    gia' filtrato contro il registry reale), fornisce l'ORDINE e le
+    DIPENDENZE reali fra i task proposti dall'LLM — tradotte qui in
+    depends_on a chiave locale (m2/engine.py::create_plan le risolve in id
+    reali e costruisce/valida il DAG, invariato). Ogni dipendenza verso una
+    capability non presente in detected_intents (scartata da select_agents,
+    es. non disponibile) viene silenziosamente ignorata: mai un riferimento
+    pendente. Senza proposta (o senza dipendenze dichiarate), il
+    comportamento resta quello originario: nessuna dipendenza forzata, ogni
+    capability selezionata resta un task indipendente."""
     seen: dict = {}
+    cap_to_dtype: dict = {}
     for cap in detected_intents:
         dtype = _M2_NATIVE_DELIVERABLE.get(cap)
         if dtype and dtype not in seen:
             seen[dtype] = M2_DELIVERABLE_AGENT[dtype]  # verifica esistenza agente M2 (KeyError se mappa disallineata)
+            cap_to_dtype[cap] = dtype
+
+    dtype_list = list(seen.keys())
+    dipendenze_per_dtype: dict[str, list[str]] = {}
+    if task_proposti_validati:
+        ordine_per_cap = {t["capability"]: t.get("ordine", 0) for t in task_proposti_validati}
+        dtype_list.sort(key=lambda d: ordine_per_cap.get(
+            next((c for c, dt in cap_to_dtype.items() if dt == d), None), 999,
+        ))
+        nome_to_cap = {t["nome"]: t["capability"] for t in task_proposti_validati}
+        for t in task_proposti_validati:
+            dtype = cap_to_dtype.get(t["capability"])
+            if not dtype:
+                continue
+            deps_dtype = []
+            for dep_nome in (t.get("dipende_da") or []):
+                dep_cap = nome_to_cap.get(dep_nome)
+                dep_dtype = cap_to_dtype.get(dep_cap) if dep_cap else None
+                if dep_dtype and dep_dtype in seen and dep_dtype != dtype and dep_dtype not in deps_dtype:
+                    deps_dtype.append(dep_dtype)
+            if deps_dtype:
+                dipendenze_per_dtype[dtype] = deps_dtype
+
+    key_by_dtype = {dtype: f"t{i}" for i, dtype in enumerate(dtype_list, start=1)}
     return [
-        {"key": f"t{i}", "name": dtype, "deliverable_type": dtype, "depends_on": []}
-        for i, dtype in enumerate(seen.keys(), start=1)
+        {
+            "key": key_by_dtype[dtype], "name": dtype, "deliverable_type": dtype,
+            "depends_on": [key_by_dtype[d] for d in dipendenze_per_dtype.get(dtype, [])],
+        }
+        for dtype in dtype_list
     ]
 
 
@@ -179,7 +272,8 @@ def _esito_non_pronto(selection: SelectionResult) -> dict:
 
 
 def prepare_brain_session(goal_text: str, *, session_id: Optional[str] = None,
-                           is_reexamination: bool = False) -> dict:
+                           is_reexamination: bool = False,
+                           capabilities_override: Optional[list] = None) -> dict:
     """Blocco C — funzione PURA (nessun db, nessuna rete): crea/riusa la
     sessione in memoria, esegue triage/selezione agenti e registra nel
     registro audit in-memory tutte le decisioni prese fino al gate
@@ -191,7 +285,17 @@ def prepare_brain_session(goal_text: str, *, session_id: Optional[str] = None,
     is_reexamination: True quando goal_text è già stato arricchito con le
     risposte a un chiarimento precedente (vedi create_plan_with_brain,
     parametro clarification) — usato solo per l'audit, non cambia la
-    logica di selezione/triage, che resta la stessa per qualunque testo."""
+    logica di selezione/triage, che resta la stessa per qualunque testo.
+
+    capabilities_override (CEO Agent 100% reale, correzione architetturale):
+    quando fornito da create_plan_with_brain() — una proposta LLM GIA'
+    validata contro il registry reale (llm_validator.py), calcolata PRIMA di
+    chiamare questa funzione — sostituisce l'euristica a parola chiave
+    (detect_capabilities) come fonte delle capability, permettendo di capire
+    l'intento anche senza alcuna parola chiave tecnica nel testo. Non
+    modifica in alcun modo i controlli di sicurezza di select_agents()
+    (rischio/dominio/contesto/disponibilita' reale), eseguiti identici per
+    qualunque fonte delle capability — vedi planning/agent_selector.py."""
     store = get_session_store()
     audit_log = get_audit_log()
     audit_event_ids: list[str] = []
@@ -212,7 +316,7 @@ def prepare_brain_session(goal_text: str, *, session_id: Optional[str] = None,
                 else "Richiesta ri-esaminata dopo risposte di chiarimento dell'utente.",
          metadata={"goal_text_length": len(goal_text or ""), "reexamination": is_reexamination})
 
-    selection = select_agents(goal_text)
+    selection = select_agents(goal_text, capabilities_override=capabilities_override)
 
     _log(EVENT_TRIAGE_COMPLETED, actor=_ACTOR_SELECTOR, decision=selection.status,
          reason=f"Capability rilevate: {selection.detected_intents}.",
@@ -312,7 +416,78 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
             clarification.get("answers") or [],
         )
 
-    prep = prepare_brain_session(goal_text, session_id=session_id, is_reexamination=is_reexamination)
+    # Idempotenza (item 13, CEO Agent 100% reale) — controllo ECONOMICO, PRIMA
+    # di interpellare qualunque provider LLM: un piano gia' creato per questa
+    # sessione (retry/doppio click/submit duplicato con lo stesso session_id)
+    # deve tornare subito, senza spendere su una proposta che verrebbe
+    # comunque scartata. Nessuna sessione nuova (session_id assente) puo' mai
+    # avere plan_id qui.
+    existing_session_peek = get_session_store().get_session(session_id) if session_id else None
+    existing_plan_id = (existing_session_peek or {}).get("plan_id")
+    if existing_plan_id and db is not None:
+        try:
+            piano_esistente = await db.plans.find_one({"id": existing_plan_id}, {"_id": 0})
+        except (AttributeError, TypeError):
+            piano_esistente = None
+        if piano_esistente:
+            tasks_esistenti = await db.tasks.find(
+                {"plan_id": existing_plan_id}, {"_id": 0}
+            ).sort("seq", 1).to_list(200)
+            prep0 = prepare_brain_session(goal_text, session_id=session_id, is_reexamination=is_reexamination)
+            payload = _selection_payload(prep0["selection"])
+            payload.update({
+                "plan": piano_esistente, "tasks": tasks_esistenti, "requires_clarification": False,
+                "session_id": prep0["session_id"], "audit_event_ids": list(prep0["audit_event_ids"]),
+                "session_state": prep0["session_state"], "idempotent_replay": True,
+            })
+            await _persist_all(db, org_id, store, audit_log, prep0["session_id"])
+            return payload
+
+    # ==================== Fase A: pre-check deterministico, SEMPRE primo ====================
+    # Rischio/dominio fuori scope: mai bypassabile, mai post-LLM — controllato
+    # QUI, prima di spendere su qualunque provider, cosi' una richiesta che
+    # sara' comunque bloccata non viene mai nemmeno mostrata a un LLM esterno.
+    precheck_bloccato = precheck_risk_and_domain(goal_text) is not None
+
+    llm_outcome = None
+    normalized = None
+    capabilities_override = None
+    if not precheck_bloccato:
+        # ==================== Fase B: comprensione — LLM PRIMA delle keyword ====================
+        # Correzione architetturale (CEO Agent 100% reale): l'LLM, quando
+        # disponibile, e' la PRIMA fonte di comprensione dell'obiettivo — mai
+        # un arricchimento successivo a una selezione gia' decisa a parola
+        # chiave. Una richiesta come "voglio aumentare i clienti" (nessuna
+        # parola chiave tecnica) puo' cosi' produrre capability/agenti/task
+        # reali quando un provider e' configurato, e ricade sull'euristica a
+        # parola chiave (detect_capabilities, dentro select_agents) solo
+        # quando l'LLM non e' disponibile o fallisce — mai un comportamento
+        # diverso per il chiamante fra i due casi.
+        chiarimenti_precedenti = [
+            {"question": c.get("question"), "answer": c.get("answer")}
+            for c in (existing_session_peek or {}).get("clarifications", [])
+        ]
+        chiarimenti_gia_dati = {
+            (c.get("question") or "").strip().lower() for c in chiarimenti_precedenti if c.get("answer")
+        }
+        llm_outcome = await llm_understanding.propose_plan(
+            db, org_id, goal_text, chiarimenti_precedenti=chiarimenti_precedenti,
+        )
+        capabilities_deterministiche = detect_capabilities(goal_text)
+        normalized = validate_and_normalize(
+            llm_outcome.proposta, goal_text=goal_text, detected_intents=capabilities_deterministiche,
+            provider_effettivo=llm_outcome.provider_effettivo, modello_effettivo=llm_outcome.modello_effettivo,
+            chiarimenti_gia_dati=chiarimenti_gia_dati,
+            budget_operativo_residuo=llm_outcome.contesto.budget_residuo_operativo if llm_outcome.contesto else None,
+        )
+        capabilities_override = normalized.capability_validate or None
+    else:
+        chiarimenti_gia_dati = set()
+
+    prep = prepare_brain_session(
+        goal_text, session_id=session_id, is_reexamination=is_reexamination,
+        capabilities_override=capabilities_override,
+    )
     sid = prep["session_id"]
     selection: SelectionResult = prep["selection"]
     audit_event_ids: list[str] = list(prep["audit_event_ids"])
@@ -321,12 +496,19 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
         # Nessun goal, nessun piano, nessuna azione M2: solo l'esito di
         # triage/selezione (NEEDS_CLARIFICATION / UNSUPPORTED / BLOCKED_RISK),
         # già interamente descritto (e già tracciato in memoria/audit) da
-        # prepare_brain_session().
+        # prepare_brain_session(). La proposta LLM (se interpellata) resta
+        # comunque visibile in modo trasparente, mai capace di cambiare
+        # questo esito deterministico.
         payload = _esito_non_pronto(selection)
         payload.update({
             "session_id": sid, "audit_event_ids": audit_event_ids,
             "session_state": prep["session_state"],
         })
+        if llm_outcome is not None:
+            payload["llm_understanding"] = llm_outcome.come_dict()
+        if normalized is not None:
+            payload["normalized_plan"] = normalized.come_dict()
+        await _persist_all(db, org_id, store, audit_log, sid)
         return payload
 
     def _log(event_type: str, *, actor: str, decision: str, reason: str, metadata: Optional[dict] = None,
@@ -338,7 +520,20 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
         audit_event_ids.append(ev["event_id"])
 
     triage = triage_goal(goal_text)
-    if triage.requires_clarification:
+    # Correzione architetturale (CEO Agent 100% reale): triage_goal() usa
+    # m2.planner.classify_objective(), un SECONDO classificatore a parola
+    # chiave, indipendente da agent_selector.py e altrettanto cieco al
+    # linguaggio libero — "Voglio aumentare i clienti" non contiene alcuna
+    # parola chiave per NESSUNO dei due. Quando select_agents() ha gia'
+    # raggiunto READY grazie a una proposta LLM validata contro il registry
+    # reale (capabilities_override), il suo esito e' piu' informativo di
+    # AMBIGUO/objective_type=None di M2: la 'doppia rete di sicurezza' resta
+    # attiva solo per il percorso puramente a parola chiave (nessun LLM
+    # disponibile o riuscito), MAI per bypassare un contesto aziendale
+    # ancora mancante (ctx.missing_critical, ricontrollato qui per difesa in
+    # profondita' anche se select_agents() lo ha gia' verificato).
+    ambiguita_bypassabile = bool(capabilities_override) and not triage.context.get("missing_critical")
+    if triage.requires_clarification and not ambiguita_bypassabile:
         # Doppia rete di sicurezza: select_agents() ha dato READY, ma il
         # triage esistente (M2 planner + contesto) rileva comunque
         # un'ambiguità non intercettata dal selettore -> si resta prudenti,
@@ -356,7 +551,93 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
             "session_id": sid, "audit_event_ids": audit_event_ids,
             "session_state": store.get_session(sid),
         })
+        await _persist_all(db, org_id, store, audit_log, sid)
         return payload
+
+    # llm_outcome/normalized sono gia' stati calcolati PRIMA della selezione
+    # deterministica (Fase B, sopra): qui si registra solo l'audit, ora che
+    # _log() e' disponibile (ha bisogno di sid/audit_event_ids gia' presenti
+    # da prepare_brain_session). Garantito non-None: se il pre-check di Fase A
+    # avesse bloccato la richiesta, il ramo 'selection.status != STATUS_READY'
+    # sopra sarebbe gia' tornato prima di arrivare qui.
+    if llm_outcome.mode == llm_understanding.MODE_REALE:
+        _log(EVENT_LLM_PROPOSAL_RECEIVED, actor=_ACTOR_SERVICE, decision="PROPOSAL_VALIDATED",
+             reason=f"Proposta ricevuta da {llm_outcome.provider_effettivo}/{llm_outcome.modello_effettivo} e validata.",
+             metadata={"providers_tried": [t.come_dict() for t in llm_outcome.providers_tried]})
+        for c in normalized.correzioni:
+            _log(EVENT_LLM_CORRECTION_APPLIED, actor=_ACTOR_SERVICE, decision=c.tipo, reason=c.dettaglio)
+    else:
+        _log(EVENT_LLM_PROPOSAL_UNAVAILABLE, actor=_ACTOR_SERVICE, decision="DETERMINISTICO",
+             reason=llm_outcome.motivo,
+             metadata={"providers_tried": [t.come_dict() for t in llm_outcome.providers_tried]})
+
+    # ---- Escalation: SOLO verso maggiore cautela, mai verso una decisione piu' permissiva ----
+    if normalized.azione_rischio_aggregata == AZIONE_BLOCK:
+        _log(EVENT_RISK_ESCALATED_BY_LLM, actor=_ACTOR_SERVICE, decision=STATUS_BLOCKED_RISK,
+             reason="Rischio identificato dalla proposta LLM in una categoria bloccante.",
+             metadata={"rischi": normalized.rischi_valutati})
+        store.update_session(sid, status=STATUS_BLOCKED_RISK)
+        payload = _selection_payload(selection)
+        rischi_bloccanti = [r["categoria"] for r in normalized.rischi_valutati if r["azione"] == AZIONE_BLOCK]
+        payload.update({
+            "status": STATUS_BLOCKED_RISK, "plan": None, "tasks": [], "requires_clarification": False,
+            "risk_flags": list(dict.fromkeys(selection.risk_flags + rischi_bloccanti)),
+            "llm_understanding": llm_outcome.come_dict(), "normalized_plan": normalized.come_dict(),
+            "session_id": sid, "audit_event_ids": audit_event_ids, "session_state": store.get_session(sid),
+        })
+        await _persist_all(db, org_id, store, audit_log, sid)
+        return payload
+
+    domande_extra = list(normalized.domande_aggiuntive)
+    motivi_escalation = []
+    if normalized.richiede_chiarimento_budget:
+        _log(EVENT_BUDGET_CLARIFICATION_REQUIRED, actor=_ACTOR_SERVICE, decision="NEEDS_CLARIFICATION",
+             reason=f"Budget: {normalized.budget_status}.")
+        domanda_budget = (
+            "I valori di budget indicati non coincidono tra loro: quale budget vuoi davvero destinare a questa iniziativa?"
+            if normalized.budget_status == "CONTRADDITTORIO" else
+            "Questa richiesta implica una spesa (es. campagna a pagamento): qual e' il budget disponibile?"
+        )
+        if domanda_budget.strip().lower() not in chiarimenti_gia_dati:
+            domande_extra.append(domanda_budget)
+        motivi_escalation.append(f"budget {normalized.budget_status.lower()}")
+
+    if normalized.azione_rischio_aggregata == AZIONE_CLARIFICATION:
+        motivi_escalation.append("rischio da chiarire")
+        for r in normalized.rischi_valutati:
+            if r["azione"] == AZIONE_CLARIFICATION:
+                domanda = f"Per procedere in sicurezza: {r['motivo']} Come preferisci gestirlo?"
+                if domanda.strip().lower() not in chiarimenti_gia_dati:
+                    domande_extra.append(domanda)
+
+    if domande_extra:
+        _log(EVENT_CLARIFICATION_REQUIRED, actor=_ACTOR_SERVICE, decision="NEEDS_CLARIFICATION",
+             reason="Dati mancanti individuati dalla proposta LLM o rischio da chiarire" + (
+                 f" ({'; '.join(motivi_escalation)})" if motivi_escalation else ""),
+             metadata={"domande": domande_extra})
+        store.update_session(sid, status="NEEDS_CLARIFICATION")
+        payload = _selection_payload(selection)
+        payload.update({
+            "plan": None, "tasks": [], "requires_clarification": True,
+            "status": "NEEDS_CLARIFICATION", "objective_type": triage.objective_type,
+            "questions": domande_extra, "clarifying_questions": domande_extra,
+            "goal_context": triage.context,
+            "llm_understanding": llm_outcome.come_dict(), "normalized_plan": normalized.come_dict(),
+            "session_id": sid, "audit_event_ids": audit_event_ids, "session_state": store.get_session(sid),
+        })
+        await _persist_all(db, org_id, store, audit_log, sid)
+        return payload
+
+    if normalized.azione_rischio_aggregata in (AZIONE_APPROVAL, AZIONE_REVIEW_TASK):
+        # Non blocca ne' chiede chiarimento: il piano procede, ma il rischio
+        # resta tracciato nell'audit e nel brain_trace del piano (sezione 10:
+        # "task di revisione"/"approval richiesta" — ogni task M2 nasce gia'
+        # IN_ATTESA_APPROVAZIONE per costruzione, quindi l'esigenza di
+        # approvazione e' gia' strutturalmente soddisfatta senza un secondo
+        # meccanismo di gate duplicato).
+        _log(EVENT_RISK_ESCALATED_BY_LLM, actor=_ACTOR_SERVICE, decision=normalized.azione_rischio_aggregata,
+             reason="Rischio identificato dalla proposta LLM: piano creato, approvazione/revisione raccomandata.",
+             metadata={"rischi": normalized.rischi_valutati})
 
     goal_id = new_id("goal")
     await db.goals.insert_one({
@@ -365,7 +646,7 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
     })
     store.update_session(sid, goal_id=goal_id)
 
-    task_specs = _brain_task_specs(selection.detected_intents)
+    task_specs = _brain_task_specs(selection.detected_intents, task_proposti_validati=normalized.task_proposti_validati)
     res = await m2_engine.create_plan(db, org_id, user_id, goal_id, goal_text, task_specs=task_specs)
     if res.get("requires_clarification") or not res.get("plan"):
         _log(EVENT_CLARIFICATION_REQUIRED, actor=_ACTOR_SERVICE, decision="NEEDS_CLARIFICATION",
@@ -381,6 +662,7 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
             "session_id": sid, "audit_event_ids": audit_event_ids,
             "session_state": store.get_session(sid),
         })
+        await _persist_all(db, org_id, store, audit_log, sid)
         return payload
 
     plan = res["plan"]
@@ -440,6 +722,26 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
     if handoff_dicts:
         handoff_status = "READY" if all(h["status"] == HANDOFF_READY for h in handoff_dicts) else "WAITING_DEPENDENCY"
 
+    # Metadati validati della proposta LLM (priorita'/scadenza) attaccati ai
+    # singoli task M2 per capability corrispondente: campo additivo, MAI letto
+    # da m2/engine.py per decidere ordine/dipendenze (che restano SOLO quelle
+    # gia' calcolate deterministicamente sopra) — solo esposto in lettura al
+    # frontend/report, coerente con "M2 riceve il piano gia' normalizzato,
+    # mai il JSON grezzo del provider" (sezione 11): qui il JSON grezzo non
+    # arriva mai a M2, arrivano solo campi scalari gia' validati.
+    _cap_per_task = {v: k for k, v in _M2_NATIVE_DELIVERABLE.items()}
+    for task in tasks:
+        cap_task = _cap_per_task.get(task["deliverable_type"])
+        match = next((t for t in normalized.task_proposti_validati if t["capability"] == cap_task), None)
+        if match:
+            await db.tasks.update_one({"id": task["id"]}, {"$set": {
+                "llm_priority": match["priorita"], "llm_deadline": match["scadenza"],
+                "llm_order_hint": match["ordine"],
+            }})
+            task["llm_priority"] = match["priorita"]
+            task["llm_deadline"] = match["scadenza"]
+            task["llm_order_hint"] = match["ordine"]
+
     brain_trace = {
         "objective_type": triage.objective_type,
         "intent_type": triage.intent_type,
@@ -448,6 +750,8 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
         "content_overrides": overrides,
         "content_fallback": scarti,
         "agent_selection": _selection_payload(selection),
+        "llm_understanding": llm_outcome.come_dict(),
+        "llm_plan": normalized.come_dict(),
     }
     await db.plans.update_one(
         {"id": plan["id"]},
@@ -559,15 +863,23 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
     # verificate (Blocco C.1 fornirà lo stato reale post-esecuzione).
     store.update_session(sid, status="PLAN_CREATED")
 
+    # llm_outcome/normalized sono gia' stati calcolati PRIMA della creazione
+    # del piano (pipeline contesto -> LLM propose -> validazione ->
+    # normalizzazione -> piano, sezione 6): qui si salva solo il riepilogo
+    # nella sessione, coerente con quanto gia' scritto in brain_trace sopra.
+    store.update_session(sid, llm_plan=normalized.come_dict())
+
     payload = _selection_payload(selection)
     payload.update({
         "plan": plan, "tasks": tasks, "requires_clarification": False,
         "brain_trace": brain_trace, "reel_project": reel_project, "flyer_project": flyer_project,
         "session_id": sid, "audit_event_ids": audit_event_ids,
         "session_state": store.get_session(sid),
+        "llm_understanding": llm_outcome.come_dict(), "normalized_plan": normalized.come_dict(),
     })
     if handoff_status is not None:
         payload["handoff_status"] = handoff_status
+    await _persist_all(db, org_id, store, audit_log, sid)
     return payload
 
 
@@ -692,3 +1004,93 @@ def inspect_session(session_id: str) -> dict:
         "audit_events": events,
         "pending_approval": pending_approval,
     }
+
+
+async def refresh_plan_readiness(db, org_id: str, plan_id: str) -> dict:
+    """Collega mark_result_ready_for_approval() (funzione pura, Blocco C) a
+    uno stato REALE: legge da MongoDB i task correnti del piano, i loro
+    deliverable correnti e ricalcola gli handoff, poi chiama la funzione
+    pura con questo stato vero. E' l'UNICO punto di produzione che invoca
+    mark_result_ready_for_approval(): prima di questa funzione, esisteva
+    solo nei test (mai raggiungibile da un utente reale). Idempotente per
+    costruzione (la funzione pura lo e' già): richiamabile a ogni polling
+    dello stato del piano senza produrre eventi duplicati."""
+    sessioni = get_session_store().find_by_plan_id(plan_id)
+    if not sessioni:
+        return {"ready": False, "session_id": None, "plan_id": plan_id,
+                "missing_conditions": ["nessuna sessione brain associata a questo piano"],
+                "event_id": None, "already_marked": False}
+    session_id = sessioni[0]["session_id"]
+
+    tasks = await db.tasks.find({"plan_id": plan_id}, {"_id": 0}).to_list(200)
+    deliverables_by_task_id: dict = {}
+    for t in tasks:
+        d = await db.deliverables.find_one(
+            {"plan_id": plan_id, "task_id": t["id"], "is_current": True}, {"_id": 0}
+        )
+        if d is not None:
+            deliverables_by_task_id[t["id"]] = d
+
+    tasks_by_id = {t["id"]: t for t in tasks}
+    plan = await db.plans.find_one({"id": plan_id}, {"_id": 0})
+    handoff_dicts: list[dict] = []
+    if plan is not None:
+        for t in tasks:
+            if not t.get("depends_on"):
+                continue
+            for h in collect_task_handoffs(
+                plan=plan, target_task=t, tasks_by_id=tasks_by_id,
+                deliverables_by_task_id=deliverables_by_task_id,
+            ):
+                handoff_dicts.append(h.to_dict())
+
+    esito = mark_result_ready_for_approval(
+        session_id=session_id, plan_id=plan_id, tasks=tasks, handoffs=handoff_dicts,
+        deliverables_by_task_id=deliverables_by_task_id, requires_approval=True,
+    )
+    if esito["ready"] and not esito["already_marked"]:
+        await _persist_all(db, org_id, get_session_store(), get_audit_log(), session_id)
+    return esito
+
+
+async def inspect_session_async(db, org_id: str, session_id: str) -> dict:
+    """Come inspect_session(), ma con un fallback: se il processo e' stato
+    riavviato (memoria in-process persa) legge lo snapshot persistito da
+    _persist_session_snapshot()/_persist_audit_events(). Prima di leggere,
+    se la sessione ha un plan_id ricalcola la readiness reale (vedi
+    refresh_plan_readiness), cosi' 'pending_approval' riflette sempre lo
+    stato vero del piano, non solo quello congelato all'ultima chiamata a
+    create_plan_with_brain()."""
+    risultato = inspect_session(session_id)
+    if not risultato["found"] and db is not None:
+        try:
+            snap = await db.brain_sessions.find_one(
+                {"session_id": session_id, "organization_id": org_id}, {"_id": 0}
+            )
+        except (AttributeError, TypeError):
+            snap = None
+        if snap is not None:
+            try:
+                eventi = await db.brain_audit_events.find(
+                    {"session_id": session_id, "organization_id": org_id}, {"_id": 0}
+                ).to_list(500)
+            except (AttributeError, TypeError):
+                eventi = []
+            pending_approval = any(e["event_type"] == EVENT_RESULT_READY_FOR_APPROVAL for e in eventi)
+            risultato = {
+                "session_id": session_id, "found": True, "session": snap,
+                "activeAgentIds": snap.get("activeAgentIds", []), "plan_id": snap.get("plan_id"),
+                "handoffs": snap.get("handoffs", []), "audit_events": eventi,
+                "pending_approval": pending_approval, "from_persisted_snapshot": True,
+            }
+
+    plan_id = risultato.get("plan_id")
+    da_snapshot = risultato.get("from_persisted_snapshot", False)
+    if risultato["found"] and plan_id and db is not None and not da_snapshot:
+        try:
+            await refresh_plan_readiness(db, org_id, plan_id)
+        except (AttributeError, TypeError):
+            pass
+        risultato = inspect_session(session_id)
+        risultato["from_persisted_snapshot"] = False
+    return risultato

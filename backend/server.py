@@ -104,6 +104,13 @@ async def startup():
     await db.meta_connections.create_index("id", unique=True)
     await db.meta_connections.create_index([("organization_id", 1), ("active", 1)])
 
+    # Brain (CEO Agent) — persistenza audit trail e snapshot sessione
+    await db.brain_audit_events.create_index("event_id", unique=True)
+    await db.brain_audit_events.create_index([("organization_id", 1), ("session_id", 1)])
+    await db.brain_audit_events.create_index([("organization_id", 1), ("plan_id", 1)])
+    await db.brain_sessions.create_index("session_id", unique=True)
+    await db.brain_sessions.create_index([("organization_id", 1), ("plan_id", 1)])
+
     # Milestone 2 (SIMULAZIONE) — indici additivi, non distruttivi
     from app.m2.models import create_m2_indexes
     await create_m2_indexes(db)

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { PageHeader, Card } from "@/components/Primitives";
@@ -6,6 +6,9 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { ArrowRight } from "lucide-react";
+import LlmModeBadge from "@/components/new-goal/LlmModeBadge";
+import PlanInsightsPanel from "@/components/new-goal/PlanInsightsPanel";
+import TasksList from "@/components/new-goal/TasksList";
 
 // Collegata esclusivamente a POST /brain/plans (mai al vecchio /goals di M1):
 // triage + selezione dinamica degli agenti + creazione del piano M2 sono
@@ -27,6 +30,27 @@ const STATUS_LABEL = {
   BLOCKED_RISK: "Bloccato",
 };
 
+// Item 5/18 (CEO Agent 100% reale): un refresh del browser durante un
+// NEEDS_CLARIFICATION non deve far perdere la sessione (l'utente ha gia'
+// risposto a delle domande). Solo l'id, mai dati sensibili: il contenuto
+// della sessione si recupera da GET /brain/sessions/:id, presidiato dallo
+// stesso auth della pagina.
+const SESSION_STORAGE_KEY = "actelya_brain_session_id";
+
+function salvaSessioneLocale(sessionId) {
+  try {
+    if (sessionId) localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+  } catch { /* storage non disponibile: nessun impatto sul flusso principale */ }
+}
+
+function leggiSessioneLocale() {
+  try { return localStorage.getItem(SESSION_STORAGE_KEY); } catch { return null; }
+}
+
+function pulisciSessioneLocale() {
+  try { localStorage.removeItem(SESSION_STORAGE_KEY); } catch { /* no-op */ }
+}
+
 export default function NewGoal() {
   const [text, setText] = useState("");
   const [result, setResult] = useState(null);
@@ -43,6 +67,7 @@ export default function NewGoal() {
   const [answers, setAnswers] = useState([]);
   const [clarifyLoading, setClarifyLoading] = useState(false);
   const [clarifyError, setClarifyError] = useState("");
+  const [resuming, setResuming] = useState(true);
 
   const currentQuestions = (result?.questions || result?.clarifying_questions || []);
 
@@ -52,12 +77,59 @@ export default function NewGoal() {
     setClarifyError("");
   };
 
+  // Al mount: se un refresh ha interrotto un chiarimento in corso, recupera
+  // lo stato dal backend (GET /brain/sessions/:id, item 5/18) invece di far
+  // ripartire l'utente da zero. Fallisce sempre in silenzio (sessione
+  // scaduta/non trovata/rete assente): in quel caso la pagina si comporta
+  // esattamente come prima di questo blocco.
+  useEffect(() => {
+    const sid = leggiSessioneLocale();
+    if (!sid) { setResuming(false); return; }
+    (async () => {
+      try {
+        const { data } = await api.get(`/brain/sessions/${sid}`);
+        const sess = data.session || {};
+        if (sess.status === "NEEDS_CLARIFICATION" && sess.clarifications?.length) {
+            const domande = sess.clarifications.map((c) => c.question);
+            const rispostePresenti = sess.clarifications.map((c) => c.answer || "");
+            setText(sess.original_request || "");
+            setEffectiveText(sess.original_request || "");
+            setAnswers(rispostePresenti);
+            setResult({
+              status: "NEEDS_CLARIFICATION", session_id: sid,
+              questions: domande, clarifying_questions: domande,
+              missing_information: domande,
+            });
+            toast.info("Sessione precedente recuperata: rispondi per continuare.");
+        } else if (sess.plan_id) {
+          setResult({
+            status: "READY", session_id: sid, resumed: true,
+            plan: { id: sess.plan_id }, activeAgentIds: sess.activeAgentIds || [],
+          });
+        } else {
+          pulisciSessioneLocale();
+        }
+      } catch {
+        pulisciSessioneLocale();
+      } finally {
+        setResuming(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const nuovoObiettivo = () => {
+    pulisciSessioneLocale();
+    setResult(null); setText(""); setEffectiveText(""); setAnswers([]); setClarifyError("");
+  };
+
   const submit = async () => {
     if (!text.trim()) return;
     setLoading(true); setResult(null); setClarifyError("");
     try {
       const { data } = await api.post("/brain/plans", { text });
       setResult(data);
+      salvaSessioneLocale(data.session_id);
       if (data.status === "NEEDS_CLARIFICATION") startClarification(data);
       if (data.status !== "READY") {
         toast.warning(STATUS_LABEL[data.status] || data.status);
@@ -93,6 +165,7 @@ export default function NewGoal() {
         },
       });
       setResult(data);
+      salvaSessioneLocale(data.session_id);
       if (data.status === "NEEDS_CLARIFICATION") startClarification(data);
       else setAnswers([]);
       if (data.status !== "READY") {
@@ -138,8 +211,17 @@ export default function NewGoal() {
         </Card>
 
         <Card className="p-5">
-          <h2 className="font-display text-lg font-medium mb-3">Esito</h2>
-          {!result && <p className="text-sm text-muted-foreground">Inserisci un obiettivo: nessuna chiamata reale, nessun piano finché non invii.</p>}
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-display text-lg font-medium">Esito</h2>
+            {result && (
+              <button data-testid="goal-new" onClick={nuovoObiettivo}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-200">
+                Nuovo obiettivo
+              </button>
+            )}
+          </div>
+          {resuming && <p className="text-sm text-muted-foreground">Verifica di una sessione precedente…</p>}
+          {!resuming && !result && <p className="text-sm text-muted-foreground">Inserisci un obiettivo: nessuna chiamata reale, nessun piano finché non invii.</p>}
 
           {result && (
             <div className="space-y-4" data-testid="goal-result">
@@ -150,6 +232,8 @@ export default function NewGoal() {
                   <span key={r} className="text-[10px] font-mono border border-red-500/30 bg-red-500/10 text-red-400 rounded-sm px-1.5 py-0.5">{r}</span>
                 ))}
               </div>
+
+              <LlmModeBadge llmUnderstanding={result.llm_understanding} />
 
               {result.status === "NEEDS_CLARIFICATION" && (
                 <div data-testid="goal-clarify" className="border border-violet-500/30 bg-violet-500/10 rounded-sm p-3 sm:p-4 space-y-3 w-full max-w-full overflow-hidden">
@@ -207,12 +291,31 @@ export default function NewGoal() {
               )}
 
               {result.status === "BLOCKED_RISK" && (
-                <div data-testid="goal-blocked" className="text-sm border border-red-500/30 bg-red-500/10 text-red-400 rounded-sm px-3 py-2.5">
+                <div data-testid="goal-blocked" className="text-sm border border-red-500/30 bg-red-500/10 text-red-400 rounded-sm px-3 py-2.5 space-y-1.5">
                   <p className="font-medium">Richiesta bloccata: implica un'azione esterna reale o un intento non consentito. Nessun piano creato, nessuna azione eseguita.</p>
+                  {result.normalized_plan?.rischi_valutati?.length > 0 && (
+                    <ul className="text-xs list-disc list-inside">
+                      {result.normalized_plan.rischi_valutati.map((r, i) => (
+                        <li key={i}>{r.categoria} ({r.severita}) — {r.motivo}</li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               )}
 
-              {result.status === "READY" && (
+              {result.status === "READY" && result.resumed && (
+                <div className="space-y-3" data-testid="goal-ready-resumed">
+                  <div className="text-sm border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 rounded-sm px-3 py-2.5">
+                    Sessione precedente recuperata: un piano era gia' stato creato prima del refresh.
+                  </div>
+                  <button data-testid="goal-go-to-room" onClick={goToRoom}
+                    className="w-full flex items-center justify-center gap-1.5 bg-emerald-600 text-white rounded-sm px-4 py-2.5 text-sm font-medium hover:bg-emerald-500 active:scale-[0.98] transition-colors duration-200">
+                    Apri in Sala Riunioni <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {result.status === "READY" && !result.resumed && (
                 <div className="space-y-4" data-testid="goal-ready">
                   <div>
                     <div className="label-caps mb-1">Agenti selezionati</div>
@@ -242,6 +345,8 @@ export default function NewGoal() {
                           <> Include un task <b>reel</b> collegato a un progetto reale (testo via Requesty, video via Runway — sempre con conferma esplicita prima di ogni chiamata a pagamento).</>
                         )}
                       </div>
+                      <PlanInsightsPanel normalizedPlan={result.normalized_plan} />
+                      <TasksList tasks={result.tasks} />
                       <button data-testid="goal-go-to-room" onClick={goToRoom}
                         className="w-full flex items-center justify-center gap-1.5 bg-emerald-600 text-white rounded-sm px-4 py-2.5 text-sm font-medium hover:bg-emerald-500 active:scale-[0.98] transition-colors duration-200">
                         Apri in Sala Riunioni <ArrowRight className="w-4 h-4" />

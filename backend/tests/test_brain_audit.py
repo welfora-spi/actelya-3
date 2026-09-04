@@ -50,9 +50,12 @@ def test_tipo_evento_sconosciuto_solleva():
         log.record(event_type="EVENTO_INVENTATO", session_id="s1", actor="test", decision="X", reason="r")
 
 
-def test_tutti_i_tredici_tipi_evento_sono_registrabili():
+def test_tutti_i_tipi_evento_sono_registrabili():
+    """13 tipi originali (Blocco C) + 5 aggiunti per la proposta LLM opzionale
+    del CEO Agent 100% reale (LLM_PROPOSAL_RECEIVED/UNAVAILABLE,
+    LLM_CORRECTION_APPLIED, RISK_ESCALATED_BY_LLM, BUDGET_CLARIFICATION_REQUIRED)."""
     log = AuditLog(clock=_clock_sequenziale())
-    assert len(ALLOWED_EVENT_TYPES) == 13
+    assert len(ALLOWED_EVENT_TYPES) == 18
     for et in ALLOWED_EVENT_TYPES:
         ev = log.record(event_type=et, session_id="s1", actor="test", decision="X", reason="r")
         assert ev["event_type"] == et

@@ -6,13 +6,13 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..config import DEFAULT_ORG_ID
 from ..db import db as _global_db
 from ..deps import require_roles, get_current_user
-from .service import create_plan_with_brain
+from .service import create_plan_with_brain, inspect_session_async
 from .agents.agent_map import agent_groups, COORDINATOR_FRONTEND_ID
 from . import skills as skills_registry
 
@@ -84,3 +84,19 @@ async def http_create_plan_with_brain(body: GoalBody, user: dict = Depends(requi
         _global_db, org_id, user["id"], body.text,
         session_id=body.session_id, clarification=clarification,
     )
+
+
+@router.get("/sessions/{session_id}")
+async def http_get_session(session_id: str, user: dict = Depends(get_current_user)):
+    """Permette al frontend di recuperare lo stato di una sessione brain
+    dopo un refresh del browser o la riapertura della pagina (item 5/18,
+    CEO Agent 100% reale): prova prima la memoria in-process (rapida), poi
+    lo snapshot persistito su MongoDB se il processo e' stato riavviato nel
+    frattempo. Se la sessione ha gia' un plan_id, ricalcola anche se il
+    risultato e' ora realmente pronto per l'approvazione (mai un dato
+    congelato al momento della creazione del piano)."""
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    risultato = await inspect_session_async(_global_db, org_id, session_id)
+    if not risultato["found"]:
+        raise HTTPException(status_code=404, detail="Sessione brain non trovata")
+    return risultato

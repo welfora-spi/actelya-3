@@ -35,7 +35,7 @@ _CAMPI_SENSIBILI = ("api_key", "password", "token", "secret", "authorization", "
 # Campi scalari: sostituiti interamente da update_session().
 _SCALAR_FIELDS = (
     "plan_id", "goal_id", "original_request", "normalized_request", "business_context",
-    "selected_agents", "activeAgentIds", "status",
+    "selected_agents", "activeAgentIds", "status", "llm_understanding", "llm_plan",
 )
 # Campi lista: SOLO append (mai sovrascritti) via append_to_session().
 _LIST_FIELDS = ("clarifications", "decisions", "handoffs", "deliverable_refs", "warnings", "errors")

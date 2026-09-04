@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Optional
 
 from ...domains.intent import classify_intent
 from ..agents.agent_map import (
@@ -266,12 +267,16 @@ def _esito_non_pronto(status: str, *, normalized_goal: str, detected_intents=Non
     )
 
 
-def select_agents(goal_text: str) -> SelectionResult:
-    """Punto d'ingresso principale del Blocco B. Deterministico: la stessa
-    richiesta produce sempre la stessa risposta (nessuno stato globale
-    mutabile, nessuna casualità, nessun LLM)."""
+def precheck_risk_and_domain(goal_text: str) -> Optional[SelectionResult]:
+    """Fase A (CEO Agent 100% reale, correzione architetturale): SEMPRE
+    deterministica, SEMPRE eseguita per prima — sia qui dentro select_agents()
+    sia, PRIMA ANCORA, direttamente da brain/service.py per evitare di
+    interpellare un provider LLM a pagamento su una richiesta che sara'
+    comunque bloccata. Nessuna proposta LLM puo' mai bypassare questo esito:
+    non riceve nemmeno la possibilita' di essere generata per una richiesta
+    che finisce qui. Ritorna un SelectionResult bloccante (BLOCKED_RISK/
+    UNSUPPORTED) o None se la richiesta puo' proseguire oltre."""
     normalized = _normalizza(goal_text)
-
     intent = classify_intent(goal_text)
     risk_flags = list(intent.get("risk_flags", []))
 
@@ -288,7 +293,35 @@ def select_agents(goal_text: str) -> SelectionResult:
     if _match_any(normalized, _OUT_OF_DOMAIN_KW):
         return _esito_non_pronto(STATUS_UNSUPPORTED, normalized_goal=normalized, risk_flags=risk_flags)
 
-    capabilities = detect_capabilities(goal_text)
+    return None
+
+
+def select_agents(goal_text: str, *, capabilities_override: Optional[list] = None) -> SelectionResult:
+    """Punto d'ingresso principale del Blocco B. Deterministico per
+    costruzione (nessuno stato globale mutabile, nessuna casualità, nessuna
+    chiamata di rete QUI dentro): la stessa richiesta con lo stesso
+    capabilities_override produce sempre la stessa risposta.
+
+    capabilities_override (CEO Agent 100% reale): quando fornito da
+    brain/service.py (una proposta LLM gia' validata contro il registry
+    reale in llm_validator.py — mai keyword), SOSTITUISCE l'euristica
+    testuale detect_capabilities() come fonte delle capability rilevate,
+    permettendo di riconoscere l'intento anche quando nessuna parola chiave
+    tecnica e' presente nel testo (es. "voglio aumentare i clienti"). Non
+    sostituisce MAI nessuno dei controlli di sicurezza sotto (rischio/
+    dominio/contesto aziendale/disponibilita' reale in M2): questi restano
+    identici, eseguiti sullo stesso goal_text, qualunque sia la fonte delle
+    capability — una proposta LLM non puo' mai aggirarli."""
+    normalized = _normalizza(goal_text)
+
+    intent = classify_intent(goal_text)
+    risk_flags = list(intent.get("risk_flags", []))
+
+    blocco = precheck_risk_and_domain(goal_text)
+    if blocco is not None:
+        return blocco
+
+    capabilities = capabilities_override if capabilities_override is not None else detect_capabilities(goal_text)
 
     # 2.5) Intento di contenuto/promozione riconosciuto ma formato REALE non
     #    specificato (né reel/video né flyer/immagine): si chiede SOLO il
