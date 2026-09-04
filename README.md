@@ -13,7 +13,7 @@ Il percorso ordinario resta sicuro: il Brain usa contenuti mock e i connector so
 - Social Media Manager: memoria persistente, pacchetti di pubblicazione, scheduling, idempotenza, recovery, gestione dell'esito incerto e metriche.
 - Meta connector: adapter Facebook Page e Instagram Professional completo lato codice e verificato con trasporto HTTP mockato. La validazione contro un account Meta reale non è stata eseguita.
 
-Il checkpoint Social è in [`docs/checkpoints/SOCIAL_MEDIA_MANAGER_CHECKPOINT.md`](docs/checkpoints/SOCIAL_MEDIA_MANAGER_CHECKPOINT.md); il PRD corrente è in [`docs/PRD.md`](docs/PRD.md).
+Il CEO Agent è completo lato codice con gateway LLM multi-provider, validazione deterministica e fallback sicuro; il checkpoint è in [`docs/checkpoints/CEO_AGENT_CHECKPOINT.md`](docs/checkpoints/CEO_AGENT_CHECKPOINT.md). Il checkpoint Social è in [`docs/checkpoints/SOCIAL_MEDIA_MANAGER_CHECKPOINT.md`](docs/checkpoints/SOCIAL_MEDIA_MANAGER_CHECKPOINT.md); il PRD corrente è in [`docs/PRD.md`](docs/PRD.md).
 
 ## Struttura
 
