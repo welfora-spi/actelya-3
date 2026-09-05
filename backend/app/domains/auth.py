@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
 from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime, timezone
@@ -15,6 +17,12 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 MAX_FAILED = 5
 LOCK_MINUTES = 15
+# Correzione regressione (vs ACTELYA 2): rate limit GENERALE per IP su
+# /auth/login, distinto e più severo del lockout per-credenziale sopra
+# (quest'ultimo, MAX_FAILED/LOCK_MINUTES, resta invariato — blocca uno
+# specifico IP+email dopo tentativi falliti ripetuti). Configurabile per
+# ambiente, default 10/minuto per IP.
+LOGIN_RATE_LIMIT_PER_MINUTE = int(os.environ.get("LOGIN_RATE_LIMIT_PER_MINUTE", "10"))
 
 
 class LoginBody(BaseModel):
@@ -45,7 +53,7 @@ def _public_user(u: dict) -> dict:
 async def login(body: LoginBody, request: Request, response: Response):
     ip = request.client.host if request.client else "unknown"
     email = body.email.lower().strip()
-    rate_limit(f"login:{ip}", max_calls=30, window_seconds=60)
+    rate_limit(f"login:{ip}", max_calls=LOGIN_RATE_LIMIT_PER_MINUTE, window_seconds=60)
 
     key = f"{ip}:{email}"
     attempt = await db.login_attempts.find_one({"identifier": key})

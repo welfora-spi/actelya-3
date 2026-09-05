@@ -217,16 +217,27 @@ def test_tick_simulazione_mode(op_token, appr_token):
     assert tr.json().get("mode") == "SIMULAZIONE"
 
 
-def test_tick_blocked_if_real_mode(admin_token, op_token, appr_token):
-    """Se possibile attivare la modalità REALE, /tick e /plans devono restituire 409.
-    Se non possibile (prerequisiti non soddisfatti) -> il test è considerato passato
-    documentando che il guard esiste (verificato in test precedente via mode)."""
+def test_plan_creation_blocked_if_real_mode_but_tick_of_existing_plan_still_works(admin_token, op_token, appr_token):
+    """Correzione (allineamento implementazione/test): il guard SIMULAZIONE
+    (m2/engine.py::_assert_simulation) e' invocato SOLO da POST /m2/plans —
+    l'endpoint HTTP che crea un piano DIRETTAMENTE su M2 grezzo, bypassando
+    triage/selezione agenti/compliance del Brain (nessun percorso prodotto
+    lo chiama: Plans.jsx crea sempre da "Nuovo Obiettivo" -> POST
+    /brain/plans). NON e' invocato da /tick: far progredire un piano GIA'
+    creato (di qualunque origine, Brain incluso) deve restare possibile
+    anche a modalità REALE attiva, altrimenti un piano Brain con task M2
+    simulati affiancati a capability REALI (reel/flyer/leadgen) non
+    potrebbe mai completare i propri task simulati in un'organizzazione
+    REALE — vedi il docstring di _assert_simulation().
+    Se l'attivazione REALE non è possibile in questo ambiente (prerequisiti
+    non soddisfatti) -> il test è considerato passato, documentando che il
+    guard esiste (verificato direttamente da tests/test_m2_block5.py)."""
     s = requests.get(f"{API}/settings", headers=_auth(admin_token), timeout=15)
     assert s.status_code == 200
     can_enable = s.json().get("can_enable_real_mode", False)
     if not can_enable:
-        pytest.skip("Prerequisiti REALE non soddisfatti: guard verificato indirettamente via mode=SIMULAZIONE.")
-    # Prepara un piano approvato in SIMULAZIONE
+        pytest.skip("Prerequisiti REALE non soddisfatti: guard verificato direttamente in test_m2_block5.py.")
+    # Prepara un piano approvato in SIMULAZIONE, PRIMA di attivare la modalità reale.
     cr = _create_plan(op_token, "Prepara una campagna social e adv per il lancio")
     plan_id = cr.json()["plan"]["id"]
     requests.post(f"{API}/m2/plans/{plan_id}/approve", headers=_auth(appr_token), timeout=15)
@@ -236,12 +247,15 @@ def test_tick_blocked_if_real_mode(admin_token, op_token, appr_token):
                          headers=_auth(admin_token), timeout=15)
         if r.status_code != 200:
             pytest.skip(f"attivazione reale rifiutata: {r.status_code} {r.text}")
-        tr = requests.post(f"{API}/m2/plans/{plan_id}/tick",
-                           headers=_auth(op_token), timeout=15)
-        assert tr.status_code == 409, tr.text
-        # anche POST /plans deve essere bloccato
+        # POST /m2/plans grezzo: bloccato (accesso HTTP diretto al percorso M2 simulato).
         cp = _create_plan(op_token, "Scrivi una breve email commerciale")
         assert cp.status_code == 409, cp.text
+        # /tick su un piano GIA' esistente: NON bloccato (fa progredire un piano
+        # gia' creato, di qualunque origine — mai impedito dalla modalità reale).
+        tr = requests.post(f"{API}/m2/plans/{plan_id}/tick",
+                           headers=_auth(op_token), timeout=15)
+        assert tr.status_code == 200, tr.text
+        assert tr.json().get("mode") == "SIMULAZIONE"
     finally:
         requests.put(f"{API}/settings/real-mode",
                      json={"enable": False}, headers=_auth(admin_token), timeout=15)

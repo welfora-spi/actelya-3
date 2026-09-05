@@ -510,14 +510,28 @@ async def _load_plan_authz(plan_id, user):
 
 async def _assert_simulation(org_id):
     """M2 produce sempre contenuto deterministico 'SIMULAZIONE' (invariato):
-    QUESTO non e' mai cambiato. Il blocco 409 storico su ai_real_mode=True e'
-    stato RIMOSSO dalle route sotto (decisione esplicita: il Brain deve poter
-    creare/approvare/eseguire un piano — comprensione, pianificazione, DAG,
-    handoff, stati, audit — anche quando l'org ha capability REALI attive per
-    ALTRE parti dello stesso piano, es. domains/reel.py/flyer.py). La
-    funzione resta definita (e testata direttamente da
-    tests/test_m2_block5.py) per compatibilità e per un futuro uso opt-in;
-    non e' piu' invocata da alcuna route di default."""
+    QUESTO non e' mai cambiato.
+
+    Correzione (allineamento implementazione/test): il guard e' invocato
+    SOLO da http_create_plan() — l'endpoint HTTP che crea un piano
+    DIRETTAMENTE su M2 grezzo, bypassando triage/selezione agenti/
+    compliance del Brain (nessun percorso prodotto oggi lo chiama:
+    Plans.jsx crea sempre da "Nuovo Obiettivo" -> POST /brain/plans).
+    Restare disponibile per questo solo scopo tecnico/di test ha senso:
+    uno "strumento di simulazione grezzo" non deve restare invocabile
+    quando l'organizzazione ha attivato la modalita' reale.
+
+    Il guard NON e' invocato da:
+    - create_plan() (funzione core, usata internamente da
+      brain/service.py::create_plan_with_brain): il Brain deve poter
+      creare/approvare/eseguire un piano — comprensione, pianificazione,
+      DAG, handoff, stati, audit — anche quando l'org ha capability REALI
+      attive per ALTRE parti dello stesso piano (es. domains/reel.py/
+      flyer.py/leadgen);
+    - http_tick() (POST /plans/{id}/tick): fa progredire un piano GIA'
+      creato, di qualunque origine (Brain o grezzo) — bloccarlo
+      impedirebbe di completare anche i task M2 simulati di un piano
+      Brain in un'organizzazione REALE, contraddicendo il punto sopra."""
     s = await _global_db.settings.find_one({"id": org_id}) or {}
     if s.get("ai_real_mode"):
         raise HTTPException(409, "Strumento di SIMULAZIONE: disponibile solo in modalità SIMULAZIONE (modalità attuale: REALE).")
@@ -534,6 +548,9 @@ class RejectBody(BaseModel):
 @router.post("/plans")
 async def http_create_plan(body: PlanBody, user: dict = Depends(require_roles("OPERATORE", "ADMIN"))):
     org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    # Percorso HTTP DIRETTO su M2 grezzo (bypassa triage/selezione agenti/
+    # compliance del Brain): guardato in SIMULAZIONE, vedi _assert_simulation().
+    await _assert_simulation(org_id)
     goal_id = new_id("goal")
     await _global_db.goals.insert_one({**base_record(org_id, user["id"]), "id": goal_id,
                                        "text": body.text, "status": "IN_APPROVAZIONE", "mode": "SIMULAZIONE"})

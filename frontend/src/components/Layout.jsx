@@ -15,23 +15,27 @@ import {
 // (Nuovo Obiettivo -> /brain/plans -> Sala Riunioni). File e route restano
 // attivi per compatibilita' con dati storici gia' esistenti, vedi App.js.
 //
-// Correzione item #9 (DECISIONE UFFICIALE): il percorso CLIENTE (qualunque
-// ruolo diverso da ADMIN) converge SOLO su Dashboard, Sala riunioni, Nuovo
-// Obiettivo, Risultati, Conoscenza azienda — mai un riferimento tecnico a
-// M2, al laboratorio Reel o alle pagine provider. L'approvazione del piano e
-// dei singoli task/media avviene ormai interamente dentro Sala Riunioni
-// (vedi CollaboratorPanel.jsx), quindi "Piani (M2)" non serve piu' al
-// cliente: resta comunque raggiungibile da ADMIN per una supervisione
-// tecnica completa. adminOnly=true = nascosto in nav a chi non ha ruolo
-// ADMIN (la route resta attiva in App.js: un accesso diretto via URL non e'
-// bloccato qui, e' solo tolto dal percorso visibile).
+// Correzione item #9 (DECISIONE UFFICIALE) + correzione regressione (vs
+// ACTELYA 2): il percorso CLIENTE puro (SOLA_LETTURA) converge SOLO su
+// Dashboard, Sala riunioni, Nuovo Obiettivo, Risultati, Conoscenza azienda —
+// mai un riferimento tecnico al laboratorio Reel o alle pagine provider.
+// "Piani (M2)" e' pero' un ruolo OPERATIVO reale per APPROVATORE/OPERATORE
+// (approvare/rifiutare/eseguire, vedi PlanDetail.jsx e la RBAC di
+// m2/engine.py, identiche): nasconderlo a questi due ruoli era una
+// regressione, non la decisione originale — resta invece riservato ad ADMIN
+// tutto cio' che e' supervisione tecnica pura (operatori AI, connessioni,
+// laboratori Reel/Lead Generation, profilo, utenti, budget, audit,
+// impostazioni). adminOnly=true = nascosto in nav a chi non ha ruolo ADMIN;
+// roles=[...] = visibile solo a chi ha uno di quei ruoli (entrambi i
+// meccanismi lasciano comunque la route attiva in App.js: un accesso
+// diretto via URL segue le stesse regole, non solo il menu).
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/sala-riunioni", label: "Sala riunioni", icon: Presentation },
   { to: "/nuovo-obiettivo", label: "Nuovo Obiettivo", icon: Target },
   { to: "/onboarding", label: "Conoscenza azienda", icon: BookOpen },
   { to: "/deliverable", label: "Risultati", icon: FileText },
-  { to: "/piani", label: "Piani (M2)", icon: Network, adminOnly: true },
+  { to: "/piani", label: "Piani (M2)", icon: Network, roles: ["ADMIN", "APPROVATORE", "OPERATORE"] },
   { to: "/operatori", label: "Operatori AI", icon: Bot, adminOnly: true },
   { to: "/connessioni", label: "Connessioni e API", icon: Plug, adminOnly: true },
   { to: "/reel", label: "Reel — laboratorio", icon: Clapperboard, adminOnly: true },
@@ -49,7 +53,7 @@ export default function Layout({ children }) {
   const navigate = useNavigate();
   const real = mode === "REALE";
   const isAdmin = hasRole("ADMIN");
-  const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
+  const visibleNav = NAV.filter((n) => (n.roles ? hasRole(...n.roles) : !n.adminOnly || isAdmin));
 
   useEffect(() => { refresh(); }, [refresh]);
 

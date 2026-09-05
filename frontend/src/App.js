@@ -45,13 +45,21 @@ function Protected({ children, bare = false, roles = null }) {
 }
 
 const ADMIN_ONLY = ["ADMIN"];
+// Correzione regressione (vs ACTELYA 2): "Piani (M2)" e il dettaglio piano
+// mostrano/agiscono già correttamente per ruolo al proprio interno
+// (PlanDetail.jsx: canApprove/canReject = APPROVATORE+ADMIN, canRun =
+// OPERATORE+APPROVATORE+ADMIN, canStop = solo ADMIN — stessa RBAC già
+// applicata lato backend in m2/engine.py) — la route non deve restare
+// ADMIN_ONLY, altrimenti un APPROVATORE/OPERATORE non potrebbe mai
+// raggiungere azioni per cui ha già il permesso reale.
+const PLANS_ROLES = ["ADMIN", "APPROVATORE", "OPERATORE"];
 
 const routes = [
   ["/", <Dashboard />],
   ["/onboarding", <Onboarding />],
   ["/nuovo-obiettivo", <NewGoal />],
-  ["/piani", <Plans />, ADMIN_ONLY],
-  ["/piani/:id", <PlanDetail />, ADMIN_ONLY],
+  ["/piani", <Plans />, PLANS_ROLES],
+  ["/piani/:id", <PlanDetail />, PLANS_ROLES],
   ["/approvazioni", <Approvals />],
   ["/esecuzioni", <Executions />],
   ["/deliverable", <Deliverables />],

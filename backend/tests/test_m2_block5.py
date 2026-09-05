@@ -9,6 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from app.m2 import models as M
 from app.m2 import engine as E
 from app.m2 import deliverables as D
+from app.models import new_id
 
 
 def _db():
@@ -287,5 +288,57 @@ def test_guard_tick_bloccato_in_modalita_reale():
             await E._global_db.settings.delete_one({"id": org})
             client.close()
     raised, ok = run(scenario())
-    assert raised == 409   # /tick e /plans bloccati in modalità reale
-    assert ok is True      # consentiti in SIMULAZIONE
+    assert raised == 409   # bloccato in modalità reale (invocato solo da POST /plans, vedi sotto)
+    assert ok is True      # consentito in SIMULAZIONE
+
+
+def test_http_create_plan_bloccato_reale_ma_http_tick_piano_esistente_no():
+    """Correzione (allineamento implementazione/test): _assert_simulation()
+    e' invocato SOLO da http_create_plan() — l'accesso HTTP DIRETTO al
+    percorso M2 grezzo (bypassa triage/selezione agenti/compliance del
+    Brain: nessun percorso prodotto lo chiama, Plans.jsx crea sempre da
+    "Nuovo Obiettivo" -> POST /brain/plans). http_tick() su un piano GIA'
+    creato deve restare disponibile anche a modalità reale attiva: fa
+    progredire un piano di qualunque origine (Brain incluso), mai bloccato
+    dalla modalità reale attivata per ALTRE capability dello stesso piano
+    (es. domains/reel.py/flyer.py/leadgen)."""
+    from fastapi import HTTPException
+
+    async def scenario():
+        client, db = _db()
+        org = f"org-test-{uuid.uuid4().hex[:8]}"
+        user = {"id": "u1", "email": "u1@test.it", "organization_id": org, "role": "OPERATORE"}
+        try:
+            # Piano creato e approvato in SIMULAZIONE, PRIMA di attivare il reale.
+            res = await E.create_plan(E._global_db, org, user["id"], new_id("goal"),
+                                      "Prepara una campagna social e adv per il lancio")
+            plan_id = res["plan"]["id"]
+            await E.approve_plan(E._global_db, plan_id, user["email"])
+
+            await E._global_db.settings.update_one({"id": org}, {"$set": {"id": org, "ai_real_mode": True}}, upsert=True)
+
+            # POST /m2/plans grezzo: bloccato.
+            creato_bloccato = None
+            try:
+                await E.http_create_plan(E.PlanBody(text="Scrivi una breve email commerciale"), user=user)
+            except HTTPException as e:
+                creato_bloccato = e.status_code
+
+            # POST /m2/plans/{id}/tick su un piano GIA' esistente: NON bloccato.
+            tick_status = None
+            try:
+                tick_res = await E.http_tick(plan_id, user=user)
+                tick_status = "ok"
+            except HTTPException as e:
+                tick_status = e.status_code
+
+            return creato_bloccato, tick_status, tick_res if tick_status == "ok" else None
+        finally:
+            await E._global_db.settings.delete_one({"id": org})
+            await _cleanup(E._global_db, org)
+            client.close()
+
+    creato_bloccato, tick_status, tick_res = run(scenario())
+    assert creato_bloccato == 409
+    assert tick_status == "ok"
+    assert tick_res.get("mode") == "SIMULAZIONE"
