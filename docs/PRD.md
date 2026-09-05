@@ -63,6 +63,20 @@ Il progetto tecnico storico M2 è conservato in [`architecture/MILESTONE2_DESIGN
 
 Il codice Social/Meta è consolidato nel tag `social-media-manager-v1.0`. I test usano trasporto mockato: la validazione live di Meta non è parte della Definition of Done locale.
 
+### Lead Generation Specialist
+
+- upload sicuro (CSV/TSV/XLSX/PDF/DOCX/TXT), validazione estensione/MIME/dimensione, hash idempotente, isolamento per organizzazione;
+- pipeline `upload → validazione → parsing → mapping → normalizzazione → deduplica → compliance → scoring → segmentazione → review → approval → export/handoff`, come coda persistente con recovery da riavvio;
+- normalizzazione con provenienza esplicita per ogni valore (fornito/estratto/pubblico/verificato/inferito/non_verificato/contraddittorio/mancante/scaduto), mai un dato inventato;
+- deduplica/entity resolution deterministica (dominio/email/telefono normalizzati), duplicati probabili sempre in revisione manuale, mai un merge automatico per sola somiglianza del nome;
+- gate privacy/compliance deterministico, sempre prevalente sul punteggio commerciale e mai bypassabile da un LLM o dall'utente;
+- scoring esplicabile (componenti, motivazione, confidenza, regole applicate, stato di qualificazione);
+- adapter di ricerca prospect astratti e sostituibili (pubblico, dati interni, provider commerciale/CRM predisposti): funziona con zero provider esterni configurati, un adapter non configurato torna sempre `NON_DISPONIBILE`;
+- campagne con ICP, segmenti, budget, approvazione ed export CSV/XLSX (formula-injection neutralizzata, record `DO_NOT_CONTACT` mai esportati);
+- handoff verso CEO Agent/altri agenti tramite un task M2 reale (`lead_gen_campaign`), stesso pattern di `video_reel`/`flyer_image`.
+
+Il checkpoint dedicato è in [`docs/checkpoints/LEAD_GENERATION_SPECIALIST_CHECKPOINT.md`](checkpoints/LEAD_GENERATION_SPECIALIST_CHECKPOINT.md).
+
 ## Sicurezza operativa
 
 Il Brain resta mock-only con `BRAIN_PROVIDER_GATEWAY=mock`. Una pubblicazione Meta reale richiede contemporaneamente:

@@ -132,12 +132,28 @@ AGENT_MAPPINGS: tuple[AgentMapping, ...] = (
     ),
     AgentMapping(
         "leadgen", "lead_gen_sdr", "lead-gen-specialist", "Lead generation specialist",
-        "Criteri e piano di lead generation (nessun contatto reale).", True,
-        execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="lead_gen_plan",
-        mission="Definire ICP, criteri di targeting e sequenza di outreach in bozza — nessun contatto reale.",
+        "Import/analisi di lead reali (upload file, ricerca prospect, scoring, deduplica, "
+        "compliance, campagne, export) — nessun contatto reale automatico.", True,
+        execution_ready=True, execution_mode=EXECUTION_MODE_REAL, deliverable_type="lead_gen_campaign",
+        implementation_note="Non e' un agente M2 operativo in senso stretto (nessun producer "
+                             "deterministico in m2/deliverables.py per questo percorso): il piano M2 "
+                             "include un task 'lead_gen_campaign' collegato a una campagna reale in "
+                             "domains/leadgen (upload, mapping, normalizzazione, deduplica, compliance, "
+                             "scoring, approvazione, export/handoff). Funziona con ZERO provider esterni "
+                             "configurati (adapter di ricerca non configurati tornano sempre "
+                             "NON_DISPONIBILE, mai un risultato inventato); un opt-out/regola privacy "
+                             "prevale sempre sul punteggio commerciale, mai bypassabile. 'm2_agent_id' "
+                             "qui e' solo un'etichetta descrittiva, non una voce di "
+                             "m2/agents_registry.py::AGENT_CONTRACTS.",
+        notes="Il task entra nello STESSO piano/DAG M2 delle altre capability (brain/service.py): un "
+              "solo piano, mai un secondo percorso separato. Il lavoro vero (upload, revisione "
+              "duplicati, approvazione, export) avviene nel laboratorio Lead Generation.",
+        mission="Definire l'ICP, importare/qualificare prospect reali (mai inventati) e preparare "
+                "campagne pronte per l'approvazione — nessun contatto automatico.",
         skills=("lead_gen_plan_m2",),
         data_accessible=("ragione_sociale", "settore", "obiettivi_commerciali"),
-        quality_criteria=("almeno 3 criteri di targeting", "nessuna PII/contatto reale nel piano"),
+        quality_criteria=("almeno un criterio ICP esplicito", "nessun record DO_NOT_CONTACT esportato",
+                          "ogni valore ha uno stato di provenienza tracciabile"),
     ),
     AgentMapping(
         "analytics", "analytics_performance", "analista-performance", "Analista performance",

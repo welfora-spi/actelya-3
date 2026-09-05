@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Target, FileText, CheckCircle2, Circle, MessageSquareText, CheckCircle, Users, Activity, Clock3, ListChecks, Coins, PlayCircle } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Target, FileText, CheckCircle2, Circle, MessageSquareText, CheckCircle, Users, Activity, Clock3, ListChecks, Coins, PlayCircle, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import api, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -161,7 +162,14 @@ export default function CollaboratorPanel({ collaborator, summary, planId, onAct
 
       <div className="mb-5">
         <div className="label-caps mb-2">Documento in produzione</div>
-        {multimodalKind && collaborator.document?.projectId ? (
+        {multimodalKind === "leadgen" && collaborator.document?.projectId ? (
+          <Link to={`/lead-generation?campaignId=${collaborator.document.projectId}`}
+            data-testid="panel-leadgen-link"
+            className="flex items-center gap-2.5 rounded-md border border-primary/40 px-3 py-2 text-sm text-primary hover:bg-primary/10 transition-colors duration-200">
+            <ExternalLink className="w-4 h-4 shrink-0" strokeWidth={1.75} />
+            Vai al laboratorio Lead Generation
+          </Link>
+        ) : multimodalKind && collaborator.document?.projectId ? (
           <MultimodalProjectPanel kind={multimodalKind} projectId={collaborator.document.projectId} compact />
         ) : collaborator.document ? (
           <div className="flex items-center gap-2.5" data-testid="panel-document">

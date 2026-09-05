@@ -12,8 +12,9 @@ Il percorso ordinario resta sicuro: il Brain usa contenuti mock e i connector so
 - Contenuti: workflow Reel e Flyer con versioni, validazione semantica e approvazioni separate per testo e media.
 - Social Media Manager: memoria persistente, pacchetti di pubblicazione, scheduling, idempotenza, recovery, gestione dell'esito incerto e metriche.
 - Meta connector: adapter Facebook Page e Instagram Professional completo lato codice e verificato con trasporto HTTP mockato. La validazione contro un account Meta reale non è stata eseguita.
+- Lead Generation Specialist: upload file (CSV/TSV/XLSX/PDF/DOCX/TXT), normalizzazione con provenienza, deduplica/entity resolution deterministica, gate privacy/compliance sempre prevalente sul punteggio, scoring spiegabile, campagne, export CSV/XLSX e handoff — funziona senza alcun provider esterno configurato (adapter di ricerca non configurati tornano sempre `NON_DISPONIBILE`).
 
-Il CEO Agent è completo lato codice con gateway LLM multi-provider, validazione deterministica e fallback sicuro; il checkpoint è in [`docs/checkpoints/CEO_AGENT_CHECKPOINT.md`](docs/checkpoints/CEO_AGENT_CHECKPOINT.md). Il checkpoint Social è in [`docs/checkpoints/SOCIAL_MEDIA_MANAGER_CHECKPOINT.md`](docs/checkpoints/SOCIAL_MEDIA_MANAGER_CHECKPOINT.md); il PRD corrente è in [`docs/PRD.md`](docs/PRD.md).
+Il CEO Agent è completo lato codice con gateway LLM multi-provider, validazione deterministica e fallback sicuro; il checkpoint è in [`docs/checkpoints/CEO_AGENT_CHECKPOINT.md`](docs/checkpoints/CEO_AGENT_CHECKPOINT.md). Il checkpoint Social è in [`docs/checkpoints/SOCIAL_MEDIA_MANAGER_CHECKPOINT.md`](docs/checkpoints/SOCIAL_MEDIA_MANAGER_CHECKPOINT.md); il checkpoint Lead Generation è in [`docs/checkpoints/LEAD_GENERATION_SPECIALIST_CHECKPOINT.md`](docs/checkpoints/LEAD_GENERATION_SPECIALIST_CHECKPOINT.md); il PRD corrente è in [`docs/PRD.md`](docs/PRD.md).
 
 ## Struttura
 

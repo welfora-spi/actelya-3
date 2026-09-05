@@ -97,11 +97,14 @@ SKILLS: dict[str, Skill] = {
         validation="m2/deliverables.py::validate_ad_campaign_draft", base_mode=STATUS_M2_SIMULATION,
     ),
     "lead_gen_plan_m2": Skill(
-        "lead_gen_plan_m2", "Piano lead generation (simulato)", "1.0.0",
-        "ICP, criteri, sequenza di outreach con placeholder — nessun contatto reale, nessuna PII.",
-        capability="leadgen", deliverable_type="lead_gen_plan",
-        allowed_roles=("lead-gen-specialist",), tools=("m2_producer",),
-        validation="m2/deliverables.py::validate_lead_gen_plan", base_mode=STATUS_M2_SIMULATION,
+        "lead_gen_plan_m2", "Lead generation — import e qualifica reale", "2.0.0",
+        "Upload file (CSV/TSV/XLSX/PDF/DOCX/TXT), ricerca prospect, normalizzazione, deduplica, "
+        "gate privacy/compliance e scoring spiegabile — dati reali (mai inventati), nessun "
+        "contatto automatico. Funziona senza alcun provider esterno configurato.",
+        capability="leadgen", deliverable_type="lead_gen_campaign",
+        allowed_roles=("lead-gen-specialist",),
+        validation="domains/leadgen/compliance.py::evaluate_compliance + domains/leadgen/scoring.py::score_record",
+        base_mode=STATUS_M2_SIMULATION,
     ),
     "kpi_report_m2": Skill(
         "kpi_report_m2", "Report KPI (simulato)", "1.0.0",

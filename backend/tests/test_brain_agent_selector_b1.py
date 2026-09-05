@@ -50,11 +50,19 @@ def test_appointments_e_nurturing_sono_unavailable_non_operativi_m2():
 
 
 def test_capability_operative_hanno_execution_mode_m2_e_deliverable_type():
-    for cap in ("strategy", "editorial", "social", "email", "ads", "leadgen", "analytics"):
+    for cap in ("strategy", "editorial", "social", "email", "ads", "analytics"):
         m = mapping_by_capability(cap)
         assert m.execution_mode == EXECUTION_MODE_M2
         assert m.execution_ready is True
         assert m.deliverable_type  # ogni capability M2 "produttrice" ha un deliverable_type
+
+
+def test_leadgen_e_capability_reale_con_dominio_dedicato():
+    m = mapping_by_capability("leadgen")
+    assert m.execution_mode == EXECUTION_MODE_REAL
+    assert m.execution_ready is True
+    assert m.deliverable_type == "lead_gen_campaign"
+    assert m.implementation_note
 
 
 def test_review_compliance_e_m2_ma_senza_deliverable_type_proprio():

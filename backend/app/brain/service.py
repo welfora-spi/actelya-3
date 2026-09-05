@@ -98,6 +98,7 @@ from .producers import produce_brain_deliverable
 from ..domains.knowledge import current_facts_map
 from ..domains import reel as reel_domain
 from ..domains import flyer as flyer_domain
+from ..domains.leadgen import router as leadgen_router
 from fastapi import HTTPException
 
 _ACTOR_SELECTOR = "brain.planning.agent_selector"
@@ -163,8 +164,9 @@ PLAN_GENERATION_TAG = "brain_single_team_v2"
 # elencate producono un task M2 "classico" (prodotto simulato deterministico via
 # m2/deliverables.py). Le altre capability riconosciute NON compaiono qui perche' non
 # hanno un task M2 proprio:
-# - "video_reel"/"flyer_image": task REALE aggiunto piu' sotto, collegato a un progetto
-#   vero (domains/reel.py / domains/flyer.py), mai tramite questa mappa.
+# - "video_reel"/"flyer_image"/"leadgen": task REALE aggiunto piu' sotto, collegato a
+#   un progetto/campagna vera (domains/reel.py / domains/flyer.py / domains/leadgen),
+#   mai tramite questa mappa.
 # - "review_compliance"/"audio_voiceover": nessun deliverable_type esiste per loro
 #   (agent_map.py: deliverable_type=None) — restano visibili SOLO come agente convocato
 #   (activeAgentIds), mai come task del DAG.
@@ -173,7 +175,6 @@ _M2_NATIVE_DELIVERABLE = {
     "editorial": "editorial_plan",
     "social": "social_content",
     "ads": "ad_campaign_draft",
-    "leadgen": "lead_gen_plan",
     "analytics": "kpi_report",
     "email": "email",
 }
@@ -846,6 +847,52 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
                  goal_id=goal_id, plan_id=plan["id"],
                  metadata={"task_id": flyer_task["id"], "flyer_project_id": flyer_project["id"]})
 
+    # Stesso pattern, capability REALE 'leadgen' (Lead Generation Specialist):
+    # terza applicazione della stessa architettura (obiettivo -> grounding ->
+    # dominio dedicato -> task tracciabile), mai un secondo motore. A
+    # differenza di video_reel/flyer_image il dominio funziona con ZERO
+    # provider esterni configurati (adapter di ricerca non configurati
+    # tornano sempre NON_DISPONIBILE): la campagna viene comunque creata in
+    # BOZZA, upload/import/scoring/approvazione avvengono nel laboratorio
+    # Lead Generation (vedi domains/leadgen).
+    lead_campaign = None
+    if "leadgen" in selection.detected_intents:
+        pseudo_user = {"id": user_id, "email": None, "organization_id": org_id}
+        nome_campagna = f"Lead generation — {ctx.prodotto or ctx.azienda or 'obiettivo'}"[:120]
+        try:
+            lead_campaign = await leadgen_router.create_campaign(
+                leadgen_router.CampaignBody(name=nome_campagna, goal_id=goal_id, plan_id=plan["id"],
+                                           message=goal_text),
+                pseudo_user,
+            )
+        except HTTPException as exc:
+            _log(EVENT_ERROR_FALLBACK, actor=_ACTOR_SERVICE, decision="FALLBACK_M2_DEFAULT",
+                 reason=f"Task 'leadgen' non aggiunto al piano: {exc.detail}",
+                 goal_id=goal_id, plan_id=plan["id"], metadata={"detail": exc.detail})
+        else:
+            leadgen_mapping = mapping_by_capability("leadgen")
+            ultimo = await db.tasks.find({"plan_id": plan["id"]}).sort("seq", -1).to_list(1)
+            seq = (ultimo[0]["seq"] + 1) if ultimo else 1
+            leadgen_task = new_task(
+                org_id, user_id, plan["id"], goal_id, plan["version"], seq,
+                name="Lead generation — campagna e prospect",
+                agent_id=leadgen_mapping.frontend_agent_id if leadgen_mapping else "lead-gen-specialist",
+                deliverable_type="lead_gen_campaign",
+                inputs={"cost": 0.0, "deliverable_override": {
+                    "lead_campaign_id": lead_campaign["id"], "mode": "REALE",
+                    "note": "Carica i file, avvia l'import e approva in Lead Generation — laboratorio.",
+                }},
+                depends_on=[],
+            )
+            await db.tasks.insert_one(leadgen_task)
+            await db.plans.update_one({"id": plan["id"]}, {"$push": {
+                "dag.nodes": leadgen_task["id"], "topo_order": leadgen_task["id"],
+            }})
+            _log(EVENT_PLAN_ALLOWED, actor=_ACTOR_SERVICE, decision="LEADGEN_TASK_LINKED",
+                 reason="Task 'lead_gen_campaign' aggiunto al piano M2, collegato alla campagna reale in domains/leadgen.",
+                 goal_id=goal_id, plan_id=plan["id"],
+                 metadata={"task_id": leadgen_task["id"], "lead_campaign_id": lead_campaign["id"]})
+
     tasks = await db.tasks.find({"plan_id": plan["id"]}, {"_id": 0}).sort("seq", 1).to_list(200)
 
     for task_id, dtype in overrides.items():
@@ -873,6 +920,7 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
     payload.update({
         "plan": plan, "tasks": tasks, "requires_clarification": False,
         "brain_trace": brain_trace, "reel_project": reel_project, "flyer_project": flyer_project,
+        "lead_campaign": lead_campaign,
         "session_id": sid, "audit_event_ids": audit_event_ids,
         "session_state": store.get_session(sid),
         "llm_understanding": llm_outcome.come_dict(), "normalized_plan": normalized.come_dict(),

@@ -171,7 +171,8 @@ def test_capability_reale_ma_non_rilevata_da_keyword_entra_nel_piano(monkeypatch
             assert res["normalized_plan"]["capability_extra_scartate"] == []
             assert "lead-gen-specialist" in res["activeAgentIds"]
             deliverable_types = {t["deliverable_type"] for t in res["tasks"]}
-            assert "lead_gen_plan" in deliverable_types
+            assert "lead_gen_campaign" in deliverable_types
+            assert res["lead_campaign"] is not None
             return True
         finally:
             await _cleanup(db, org)

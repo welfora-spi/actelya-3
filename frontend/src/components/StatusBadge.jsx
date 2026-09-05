@@ -66,6 +66,23 @@ const MAP = {
   PUBLISHED: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
   CANCELLED: "bg-zinc-600/15 text-zinc-400 border-zinc-600/30 line-through",
   FAILED: "bg-red-500/15 text-red-400 border-red-500/30",
+  // Lead Generation Specialist: domains/leadgen (file/job/qualificazione/compliance)
+  VALIDATO: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  RIFIUTATO: "bg-red-500/15 text-red-400 border-red-500/30",
+  UPLOADED: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+  PARSING: "bg-blue-500/15 text-blue-400 border-blue-500/30 animate-pulse",
+  NORMALIZED: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  SCORING: "bg-blue-500/15 text-blue-400 border-blue-500/30 animate-pulse",
+  REVIEW_REQUIRED: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  READY_FOR_APPROVAL: "bg-teal-500/15 text-teal-400 border-teal-500/30",
+  ESPORTATA: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  IN_LAVORAZIONE: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  PARTIAL: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  QUALIFIED: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  INCOMPLETE: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+  EXCLUDED: "bg-zinc-600/15 text-zinc-400 border-zinc-600/30",
+  DO_NOT_CONTACT: "bg-red-500/15 text-red-400 border-red-500/30",
+  APPROVAL_REQUIRED: "bg-violet-500/15 text-violet-400 border-violet-500/30",
 };
 
 export function StatusBadge({ status, className, testid }) {

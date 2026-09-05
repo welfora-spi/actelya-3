@@ -11,6 +11,8 @@ from app.models import now_iso
 from app.domains import (auth, org, users_mgmt, connections, engine, approvals, settings, budget, stats,
                          tenant, onboarding, knowledge, discovery, reel, video_connections, flyer,
                          social_publishing, meta_connections)
+from app.domains.leadgen import router as leadgen_router
+from app.domains.leadgen import pipeline as leadgen_pipeline
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -37,6 +39,7 @@ for module in (auth, org, users_mgmt, connections, engine, approvals, settings, 
               social_publishing, meta_connections):
     api_router.include_router(module.router)
 api_router.include_router(meta_connections.status_router)
+api_router.include_router(leadgen_router.router)
 
 from app.m2 import engine as m2_engine
 api_router.include_router(m2_engine.router)
@@ -111,6 +114,34 @@ async def startup():
     await db.brain_sessions.create_index("session_id", unique=True)
     await db.brain_sessions.create_index([("organization_id", 1), ("plan_id", 1)])
 
+    # Lead Generation Specialist — indici idempotenti, mai unici globali fra
+    # organizzazioni diverse (una stessa email/dominio puo' legittimamente
+    # comparire in due tenant differenti).
+    await db.lead_files.create_index("id", unique=True)
+    await db.lead_files.create_index([("organization_id", 1), ("hash", 1)])
+    await db.lead_files.create_index([("organization_id", 1), ("created_at", -1)])
+    await db.lead_files.create_index([("organization_id", 1), ("status", 1), ("created_at", -1)])
+    await db.lead_import_jobs.create_index("id", unique=True)
+    await db.lead_import_jobs.create_index([("organization_id", 1), ("idempotency_key", 1)])
+    await db.lead_import_jobs.create_index([("status", 1), ("created_at", 1)])
+    await db.lead_campaigns.create_index("id", unique=True)
+    await db.lead_campaigns.create_index([("organization_id", 1), ("status", 1)])
+    await db.lead_campaigns.create_index([("organization_id", 1), ("created_at", -1)])
+    await db.lead_companies.create_index("id", unique=True)
+    await db.lead_companies.create_index([("organization_id", 1), ("campaign_id", 1), ("qualification_status", 1)])
+    await db.lead_companies.create_index([("organization_id", 1), ("dominio.value", 1)])
+    await db.lead_companies.create_index([("organization_id", 1), ("campaign_id", 1), ("score", -1)])
+    await db.lead_companies.create_index([("organization_id", 1), ("campaign_id", 1), ("created_at", -1)])
+    await db.lead_persons.create_index("id", unique=True)
+    await db.lead_persons.create_index([("organization_id", 1), ("campaign_id", 1), ("qualification_status", 1)])
+    await db.lead_persons.create_index([("organization_id", 1), ("campaign_id", 1), ("score", -1)])
+    await db.lead_persons.create_index([("organization_id", 1), ("campaign_id", 1), ("created_at", -1)])
+    await db.lead_dedup_reviews.create_index("id", unique=True)
+    await db.lead_dedup_reviews.create_index([("organization_id", 1), ("campaign_id", 1), ("status", 1)])
+    await db.lead_dedup_reviews.create_index([("organization_id", 1), ("campaign_id", 1), ("status", 1), ("created_at", 1)])
+    await db.lead_exports.create_index("id", unique=True)
+    await db.lead_handoff_packages.create_index("id", unique=True)
+
     # Milestone 2 (SIMULAZIONE) — indici additivi, non distruttivi
     from app.m2.models import create_m2_indexes
     await create_m2_indexes(db)
@@ -159,6 +190,9 @@ async def startup():
 
     await discovery.recover_on_startup()
     discovery.start_worker()
+
+    await leadgen_pipeline.recover_on_startup(db)
+    leadgen_pipeline.start_worker(db)
 
     # Milestone 2 — recovery idempotente protetto da lock (leader election)
     await m2_engine.recover_m2(db)

@@ -20,6 +20,7 @@ import Deliverables from "@/pages/Deliverables";
 import Agents from "@/pages/Agents";
 import Connections from "@/pages/Connections";
 import ReelStudio from "@/pages/ReelStudio";
+import LeadGeneration from "@/pages/LeadGeneration";
 import OrgProfile from "@/pages/OrgProfile";
 import Users from "@/pages/Users";
 import Budget from "@/pages/Budget";
@@ -57,6 +58,7 @@ const routes = [
   ["/operatori", <Agents />, ADMIN_ONLY],
   ["/connessioni", <Connections />, ADMIN_ONLY],
   ["/reel", <ReelStudio />, ADMIN_ONLY],
+  ["/lead-generation", <LeadGeneration />, ADMIN_ONLY],
   ["/profilo", <OrgProfile />, ADMIN_ONLY],
   ["/utenti", <Users />, ADMIN_ONLY],
   ["/budget", <Budget />, ADMIN_ONLY],

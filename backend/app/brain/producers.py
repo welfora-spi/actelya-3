@@ -200,33 +200,12 @@ def produce_kpi_report(ctx: GoalContext, cap: dict, gateway: ContentGateway) -> 
     }
 
 
-def produce_lead_gen_plan(ctx: GoalContext, cap: dict, gateway: ContentGateway) -> dict:
-    azienda = ctx.azienda or "l'attivita'"
-    prodotto = ctx.prodotto or "l'offerta"
-    localita = ctx.localita or "la zona"
-    pubblico = ctx.pubblico or "pubblico locale"
-    return {
-        "title": f"Piano di lead generation locale — {azienda}",
-        "icp": f"Persone e attivita' di {localita} interessate a {prodotto}, in particolare {pubblico} (profilo, non contatti reali).",
-        "criteria": [f"Area geografica: {localita}", f"Interesse dichiarato per {prodotto}",
-                    "Interazione con i canali social locali", f"Target: {pubblico}"],
-        "channels": list(cap.get("canali") or ["Instagram", "Facebook"]),
-        "outreach_sequence": [
-            {"step": 1, "message_template": f"Ciao [Nome], grazie per l'interesse verso {azienda}! Ti va di scoprire di persona {prodotto}?"},
-            {"step": 2, "message_template": f"Ciao [Nome], torniamo a scriverti: da {azienda} a {localita} trovi sempre {prodotto} fresco."},
-        ],
-        "note": "Solo criteri e template: nessun contatto reale, nessuna PII, nessun invio.",
-        "mode": "SIMULAZIONE",
-    }
-
-
 BRAIN_PRODUCERS = {
     "marketing_strategy": produce_marketing_strategy,
     "editorial_plan": produce_editorial_plan,
     "social_content": produce_social_content,
     "ad_campaign_draft": produce_ad_campaign_draft,
     "kpi_report": produce_kpi_report,
-    "lead_gen_plan": produce_lead_gen_plan,
 }
 
 

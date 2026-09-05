@@ -61,12 +61,18 @@ const DELIVERABLE_TYPE_LABEL = {
   marketing_strategy: "Strategia di marketing", editorial_plan: "Piano editoriale",
   social_content: "Post social", ad_campaign_draft: "Bozza campagna", lead_gen_plan: "Piano lead generation",
   kpi_report: "Report KPI", email: "Email", video_reel_project: "Progetto reel",
-  flyer_project: "Progetto flyer",
+  flyer_project: "Progetto flyer", lead_gen_campaign: "Campagna lead generation",
 };
 
 // deliverable_type -> kind per MultimodalProjectPanel (video/immagine reali,
 // mai una card che rimanda a una pagina laboratorio separata).
 export const MULTIMODAL_PANEL_KIND = { video_reel_project: "reel", flyer_project: "flyer" };
+
+// 'leadgen' non usa MultimodalProjectPanel (tabelle/duplicati/approvazione,
+// non generazione multimediale in linea): il pannello collaboratore rimanda
+// invece a una pagina laboratorio dedicata (/lead-generation), stesso
+// principio di "un solo piano, un solo percorso reale" di reel/flyer.
+export const LEADGEN_DELIVERABLE_TYPE = "lead_gen_campaign";
 
 function activityFromTask(task, deliverable) {
   const label = DELIVERABLE_TYPE_LABEL[task?.deliverable_type] || task?.name || "Attività";
@@ -239,8 +245,10 @@ export function useMeetingRoomDataFromPlan(planId, refetchToken = 0) {
             document: deliverable ? {
               id: deliverable.id, title: DELIVERABLE_TYPE_LABEL[deliverable.deliverable_type] || deliverable.deliverable_type,
               type: deliverable.deliverable_type, status: deliverable.status, version: deliverable.version,
-              projectKind: MULTIMODAL_PANEL_KIND[deliverable.deliverable_type] || null,
-              projectId: deliverable.content?.reel_project_id || deliverable.content?.flyer_project_id || null,
+              projectKind: MULTIMODAL_PANEL_KIND[deliverable.deliverable_type]
+                || (deliverable.deliverable_type === LEADGEN_DELIVERABLE_TYPE ? "leadgen" : null),
+              projectId: deliverable.content?.reel_project_id || deliverable.content?.flyer_project_id
+                || deliverable.content?.lead_campaign_id || null,
             } : null,
             history: task ? [
               { label: "Task creato", time: task.created_at ? new Date(task.created_at).toLocaleTimeString().slice(0, 5) : "—", state: "done" },
