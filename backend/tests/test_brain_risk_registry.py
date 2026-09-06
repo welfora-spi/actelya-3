@@ -17,12 +17,28 @@ from app.brain.risk_registry import (
 
 
 @pytest.mark.parametrize("categoria,severita_qualunque", [
-    ("invio", "BASSA"), ("invio", "ALTA"), ("azione_esterna_non_autorizzata", "BASSA"),
     ("irreversibile", "BASSA"), ("irreversibile", "ALTA"),
 ])
 def test_categorie_bloccanti_mai_declassate(categoria, severita_qualunque):
     d = resolve_risk_action(categoria, severita_qualunque)
     assert d.azione == AZIONE_BLOCK
+
+
+def test_invio_e_azione_esterna_non_autorizzata_sono_approval_non_block():
+    # Fix P0 "separazione PLANNING/EXECUTION": "invio"/"azione_esterna_non_
+    # autorizzata" asserivano in precedenza AZIONE_BLOCK qui — comportamento
+    # riconosciuto come un bug, perché in brain/service.py un BLOCK impediva
+    # la creazione dell'intero piano per la sola menzione futura di un invio.
+    # Ora risolvono ad APPROVAL, esattamente come spesa/dati_personali: il
+    # piano viene creato, l'azione di invio concreta resta comunque soggetta
+    # ad approvazione esplicita prima di ogni effetto esterno reale (vedi
+    # brain/service.py e planning/agent_selector.py::precheck_risk_and_domain,
+    # che blocca a monte solo il linguaggio manifestamente illegale/
+    # ingannevole della denylist).
+    assert resolve_risk_action("invio", "BASSA").azione == AZIONE_REVIEW_TASK  # severita' BASSA derubrica come spesa
+    assert resolve_risk_action("invio", "MEDIA").azione == AZIONE_APPROVAL
+    assert resolve_risk_action("invio", "ALTA").azione == AZIONE_APPROVAL
+    assert resolve_risk_action("azione_esterna_non_autorizzata", "MEDIA").azione == AZIONE_APPROVAL
 
 
 def test_spesa_severita_media_e_approval():

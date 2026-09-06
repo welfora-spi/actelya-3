@@ -253,6 +253,7 @@ def _selection_payload(selection: SelectionResult) -> dict:
         "selection_reasons": selection.selection_reasons,
         "excluded_agents": [a.__dict__ for a in selection.excluded_agents],
         "risk_flags": selection.risk_flags,
+        "action_types": selection.action_types,
         "execution_ready": selection.execution_ready,
         "unavailable_capabilities": selection.unavailable_capabilities,
         "simulation_only_capabilities": selection.simulation_only_capabilities,
@@ -574,21 +575,18 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
              metadata={"providers_tried": [t.come_dict() for t in llm_outcome.providers_tried]})
 
     # ---- Escalation: SOLO verso maggiore cautela, mai verso una decisione piu' permissiva ----
-    if normalized.azione_rischio_aggregata == AZIONE_BLOCK:
-        _log(EVENT_RISK_ESCALATED_BY_LLM, actor=_ACTOR_SERVICE, decision=STATUS_BLOCKED_RISK,
-             reason="Rischio identificato dalla proposta LLM in una categoria bloccante.",
-             metadata={"rischi": normalized.rischi_valutati})
-        store.update_session(sid, status=STATUS_BLOCKED_RISK)
-        payload = _selection_payload(selection)
-        rischi_bloccanti = [r["categoria"] for r in normalized.rischi_valutati if r["azione"] == AZIONE_BLOCK]
-        payload.update({
-            "status": STATUS_BLOCKED_RISK, "plan": None, "tasks": [], "requires_clarification": False,
-            "risk_flags": list(dict.fromkeys(selection.risk_flags + rischi_bloccanti)),
-            "llm_understanding": llm_outcome.come_dict(), "normalized_plan": normalized.come_dict(),
-            "session_id": sid, "audit_event_ids": audit_event_ids, "session_state": store.get_session(sid),
-        })
-        await _persist_all(db, org_id, store, audit_log, sid)
-        return payload
+    # Fix P0 "separazione PLANNING/EXECUTION": anche una categoria BLOCK (es.
+    # "irreversibile") non impedisce piu' qui la creazione del piano — quella
+    # resta riservata esclusivamente alla denylist deterministica intercettata
+    # a monte da precheck_risk_and_domain(). L'unica differenza rispetto ad
+    # APPROVAL/REVIEW_TASK e' che le categorie BLOCK restano tracciate in modo
+    # esplicito in risk_flags, cosi' l'azione concreta corrispondente non puo'
+    # comunque procedere senza un'approvazione esplicita a valle (ogni task M2
+    # nasce IN_ATTESA_APPROVAZIONE per costruzione; ogni effetto esterno reale
+    # passa dal Tool Execution Gateway).
+    rischi_bloccanti = [r["categoria"] for r in normalized.rischi_valutati if r["azione"] == AZIONE_BLOCK]
+    if rischi_bloccanti:
+        selection.risk_flags = list(dict.fromkeys(selection.risk_flags + rischi_bloccanti))
 
     domande_extra = list(normalized.domande_aggiuntive)
     motivi_escalation = []
@@ -630,13 +628,15 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
         await _persist_all(db, org_id, store, audit_log, sid)
         return payload
 
-    if normalized.azione_rischio_aggregata in (AZIONE_APPROVAL, AZIONE_REVIEW_TASK):
+    if normalized.azione_rischio_aggregata in (AZIONE_BLOCK, AZIONE_APPROVAL, AZIONE_REVIEW_TASK):
         # Non blocca ne' chiede chiarimento: il piano procede, ma il rischio
         # resta tracciato nell'audit e nel brain_trace del piano (sezione 10:
         # "task di revisione"/"approval richiesta" — ogni task M2 nasce gia'
         # IN_ATTESA_APPROVAZIONE per costruzione, quindi l'esigenza di
         # approvazione e' gia' strutturalmente soddisfatta senza un secondo
-        # meccanismo di gate duplicato).
+        # meccanismo di gate duplicato). Una categoria BLOCK richiede
+        # comunque un'approvazione esplicita prima dell'azione concreta
+        # corrispondente (mai un'approvazione implicita/automatica).
         _log(EVENT_RISK_ESCALATED_BY_LLM, actor=_ACTOR_SERVICE, decision=normalized.azione_rischio_aggregata,
              reason="Rischio identificato dalla proposta LLM: piano creato, approvazione/revisione raccomandata.",
              metadata={"rischi": normalized.rischi_valutati})

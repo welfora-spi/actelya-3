@@ -104,8 +104,13 @@ _OUT_OF_DOMAIN_KW = [
 ]
 
 _RISK_DENYLIST_KW = [
-    r"truffa", r"raggirare", r"ingannare i client", r"dati rubati", r"senza consenso",
-    r"aggirare il consenso", r"falsificare", r"contenuti falsi per ingannare", r"fake news",
+    r"truffa", r"raggirare", r"ingannare i client", r"dati rubati",
+    # "senza consenso"/"senza il loro consenso"/"senza alcun consenso": la
+    # variante flessibile (fix P0 "separazione PLANNING/EXECUTION") resta
+    # necessaria ORA piu' di prima — non c'e' piu' il backstop generico di
+    # requires_external_action a coprire per una frase non catturata qui.
+    r"senza\b.{0,25}\bconsenso", r"aggirare\b.{0,25}\bconsenso",
+    r"falsificare", r"contenuti falsi per ingannare", r"fake news",
 ]
 
 # Capability il cui contenuto è rivolto al pubblico: quando almeno una è
@@ -240,6 +245,12 @@ class SelectionResult:
     selection_reasons: dict[str, str] = field(default_factory=dict)
     excluded_agents: list[ExcludedAgent] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
+    # Tassonomia esplicita (fix P0 "separazione PLANNING/EXECUTION"): quali
+    # tipi di azione compaiono nell'obiettivo — READ/ANALYZE/CREATE_DRAFT non
+    # bloccano mai nulla; EXTERNAL_WRITE/SPEND/PERSONAL_DATA_ACTION marcano le
+    # sole azioni che richiederanno approvazione/Tool Execution Gateway prima
+    # di essere eseguite, mai la creazione del piano stesso.
+    action_types: list[str] = field(default_factory=list)
     # --- Blocco B.1: prontezza di esecuzione, sempre presenti ---
     execution_ready: bool = False
     unavailable_capabilities: list[str] = field(default_factory=list)
@@ -258,6 +269,7 @@ class SelectionResult:
             "selection_reasons": self.selection_reasons,
             "excluded_agents": [a.__dict__ for a in self.excluded_agents],
             "risk_flags": self.risk_flags,
+            "action_types": self.action_types,
             "execution_ready": self.execution_ready,
             "unavailable_capabilities": self.unavailable_capabilities,
             "simulation_only_capabilities": self.simulation_only_capabilities,
@@ -267,6 +279,7 @@ class SelectionResult:
 
 def _esito_non_pronto(status: str, *, normalized_goal: str, detected_intents=None,
                        missing_information=None, clarifying_questions=None, risk_flags=None,
+                       action_types=None,
                        unavailable_capabilities=None, execution_warnings=None) -> SelectionResult:
     return SelectionResult(
         status=status,
@@ -279,6 +292,7 @@ def _esito_non_pronto(status: str, *, normalized_goal: str, detected_intents=Non
         selection_reasons={},
         excluded_agents=[],
         risk_flags=risk_flags or [],
+        action_types=action_types or [],
         execution_ready=False,
         unavailable_capabilities=unavailable_capabilities or [],
         simulation_only_capabilities=[],
@@ -294,23 +308,39 @@ def precheck_risk_and_domain(goal_text: str) -> Optional[SelectionResult]:
     comunque bloccata. Nessuna proposta LLM puo' mai bypassare questo esito:
     non riceve nemmeno la possibilita' di essere generata per una richiesta
     che finisce qui. Ritorna un SelectionResult bloccante (BLOCKED_RISK/
-    UNSUPPORTED) o None se la richiesta puo' proseguire oltre."""
+    UNSUPPORTED) o None se la richiesta puo' proseguire oltre.
+
+    Fix P0 "separazione PLANNING/EXECUTION": la sola presenza, nel testo,
+    di un verbo di azione esterna (invia/pubblica/spendi/...) NON blocca
+    piu' qui la creazione del piano — un obiettivo misto (bozza + invio,
+    es. "prepara una campagna e attiva la campagna") deve poter produrre
+    piano/task/deliverable normalmente; e' SOLO l'azione concreta rischiosa
+    (invio reale, spesa reale, esportazione di dati personali, ecc.) a dover
+    restare bloccata, e lo fa a valle — task M2 sempre IN_ATTESA_APPROVAZIONE
+    per costruzione, e Tool Execution Gateway per ogni effetto esterno reale
+    (vedi risk_registry.py e tools/gateway.py). Qui blocchiamo SOLO il
+    linguaggio manifestamente illegale/ingannevole (denylist): quello non
+    diventa mai un piano, in nessuna forma."""
     normalized = _normalizza(goal_text)
     intent = classify_intent(goal_text)
     risk_flags = list(intent.get("risk_flags", []))
+    action_types = list(intent.get("action_types", []))
 
-    # 1) Sicurezza prima di tutto: azione esterna reale esplicitamente
-    #    richiesta, o linguaggio manifestamente illegale/ingannevole. Una
-    #    normale richiesta di bozze/strategie/materiali simulati NON è mai
-    #    considerata rischiosa.
-    if intent.get("requires_external_action") or _match_any(normalized, _RISK_DENYLIST_KW):
+    # 1) Sicurezza prima di tutto: linguaggio manifestamente illegale o
+    #    ingannevole (truffa, dati rubati, aggirare il consenso, ...). Una
+    #    normale richiesta di bozze/strategie/materiali simulati — anche se
+    #    menziona un invio o una spesa futuri — NON è mai bloccata qui: lo
+    #    sara', se necessario, solo l'azione concreta corrispondente.
+    if _match_any(normalized, _RISK_DENYLIST_KW):
         flags = risk_flags or ["azione_esterna_non_autorizzata"]
-        return _esito_non_pronto(STATUS_BLOCKED_RISK, normalized_goal=normalized, risk_flags=flags)
+        return _esito_non_pronto(STATUS_BLOCKED_RISK, normalized_goal=normalized, risk_flags=flags,
+                                  action_types=action_types)
 
     # 2) Richiesta chiaramente fuori dal dominio di ACTELYA 3 (marketing/
     #    vendite/contenuti): nessuna capability disponibile può soddisfarla.
     if _match_any(normalized, _OUT_OF_DOMAIN_KW):
-        return _esito_non_pronto(STATUS_UNSUPPORTED, normalized_goal=normalized, risk_flags=risk_flags)
+        return _esito_non_pronto(STATUS_UNSUPPORTED, normalized_goal=normalized, risk_flags=risk_flags,
+                                  action_types=action_types)
 
     return None
 
@@ -335,6 +365,7 @@ def select_agents(goal_text: str, *, capabilities_override: Optional[list] = Non
 
     intent = classify_intent(goal_text)
     risk_flags = list(intent.get("risk_flags", []))
+    action_types = list(intent.get("action_types", []))
 
     blocco = precheck_risk_and_domain(goal_text)
     if blocco is not None:
@@ -362,6 +393,7 @@ def select_agents(goal_text: str, *, capabilities_override: Optional[list] = Non
                 "con immagine (flyer/immagine promozionale)? Dimmelo e continuo subito con lo stesso obiettivo.",
             ],
             risk_flags=risk_flags,
+            action_types=action_types,
         )
 
     # 3) Nessuna capability riconosciuta ma nessun segnale "fuori dominio":
@@ -375,6 +407,7 @@ def select_agents(goal_text: str, *, capabilities_override: Optional[list] = Non
                 "campagna pubblicitaria, lead generation, un report)?",
             ],
             risk_flags=risk_flags,
+            action_types=action_types,
         )
 
     # 4) Contesto aziendale indispensabile: mai inventato. Riusa
@@ -387,6 +420,7 @@ def select_agents(goal_text: str, *, capabilities_override: Optional[list] = Non
             missing_information=list(ctx.missing_critical),
             clarifying_questions=list(ctx.questions),
             risk_flags=risk_flags,
+            action_types=action_types,
         )
 
     # 5) Selezione vera e propria: compliance convocata quando si produce
@@ -409,14 +443,14 @@ def select_agents(goal_text: str, *, capabilities_override: Optional[list] = Non
         if not eseguibili:
             return _esito_non_pronto(
                 STATUS_UNSUPPORTED, normalized_goal=normalized, detected_intents=capabilities_effettive,
-                risk_flags=risk_flags, unavailable_capabilities=unavailable,
+                risk_flags=risk_flags, action_types=action_types, unavailable_capabilities=unavailable,
                 execution_warnings=[
                     f"Nessuna capability richiesta è ad oggi eseguibile: {', '.join(unavailable)}.",
                 ],
             )
         return _esito_non_pronto(
             STATUS_NEEDS_CLARIFICATION, normalized_goal=normalized, detected_intents=capabilities_effettive,
-            risk_flags=risk_flags, unavailable_capabilities=unavailable,
+            risk_flags=risk_flags, action_types=action_types, unavailable_capabilities=unavailable,
             clarifying_questions=[
                 f"Posso procedere subito con {eseguibili}, ma {unavailable} non è ancora eseguibile "
                 f"(nessun task M2 disponibile): vuoi procedere solo con le parti disponibili?",
@@ -474,6 +508,7 @@ def select_agents(goal_text: str, *, capabilities_override: Optional[list] = Non
         selection_reasons=selection_reasons,
         excluded_agents=excluded,
         risk_flags=risk_flags,
+        action_types=action_types,
         execution_ready=execution_ready,
         unavailable_capabilities=[],
         simulation_only_capabilities=simulation_only,

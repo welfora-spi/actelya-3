@@ -177,11 +177,23 @@ def test_richiesta_rischiosa_bloccata():
     assert r.activeAgentIds == []
 
 
-# ---------------- 14. richiesta di uscita reale non autorizzata ----------------
-def test_uscita_reale_non_autorizzata_bloccata():
+# ---------------- 14. obiettivo misto (bozza + invio reale): mai più BLOCKED_RISK ----------------
+def test_obiettivo_misto_con_invio_non_blocca_piu_il_piano():
+    # Fix P0 "separazione PLANNING/EXECUTION": questo test asseriva in
+    # precedenza STATUS_BLOCKED_RISK per un obiettivo MISTO (bozza + invio),
+    # comportamento riconosciuto come un bug — la sola menzione di un invio
+    # futuro non deve mai impedire piano/task/agenti/deliverable, solo
+    # l'azione di invio concreta deve restare soggetta ad approvazione (vedi
+    # planning/agent_selector.py::precheck_risk_and_domain e
+    # brain/risk_registry.py). Il denylist (truffa/dati rubati/...) resta
+    # l'unico caso che blocca davvero, vedi test_richiesta_rischiosa_bloccata.
+    # Qui lo stato risultante è NEEDS_CLARIFICATION (manca il "prodotto" nel
+    # testo, gate legittimo e indipendente da context.py) — l'importante è
+    # che NON sia mai più BLOCKED_RISK, e che "invio" resti comunque tracciato
+    # in risk_flags (mai perso, solo non più bloccante a monte).
     r = select_agents("Scrivi un'email e inviala davvero a tutti i clienti reali del Bakery & Coffee di Merate.")
-    assert r.status == STATUS_BLOCKED_RISK
-    assert r.activeAgentIds == []
+    assert r.status != STATUS_BLOCKED_RISK
+    assert "invio" in r.risk_flags
 
 
 def test_bozze_e_materiali_simulati_non_sono_mai_rischiosi():

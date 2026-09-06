@@ -17,6 +17,25 @@ SPEND_TERMS = ["spesa", "budget", "paga", "acquista", "advertising", "ads", "spo
 PERSONAL_DATA_TERMS = ["prospect", "clienti", "contatti", "lista", "destinatari", "email dei", "mail ai"]
 CONSENT_TERMS = ["consenso", "opt-in", "iscritti", "newsletter"]
 IRREVERSIBLE_TERMS = ["elimina", "cancella", "rimuovi definitivamente"]
+READ_VERBS = ["leggi", "leggere", "mostra", "mostrare", "visualizza", "visualizzare", "consulta", "consultare"]
+ANALYZE_VERBS = [
+    "analizza", "analizzare", "valuta", "valutare", "esamina", "esaminare",
+    "report", "verifica", "verificare", "controlla", "controllare", "monitora", "monitorare",
+]
+
+# Tassonomia esplicita richiesta dal fix P0 "separazione PLANNING/EXECUTION":
+# un obiettivo puo' contenere piu' tipi di azione insieme (es. "analizza i
+# lead e prepara una campagna, poi inviala"). Solo i tre tipi in
+# GATED_ACTION_TYPES rappresentano un effetto esterno/reale reale e devono
+# passare dal Tool Execution Gateway/approvazione PRIMA di essere eseguiti —
+# nessuno di questi tipi, da solo, blocca mai la creazione del piano.
+ACTION_TYPE_READ = "READ"
+ACTION_TYPE_ANALYZE = "ANALYZE"
+ACTION_TYPE_CREATE_DRAFT = "CREATE_DRAFT"
+ACTION_TYPE_EXTERNAL_WRITE = "EXTERNAL_WRITE"
+ACTION_TYPE_SPEND = "SPEND"
+ACTION_TYPE_PERSONAL_DATA_ACTION = "PERSONAL_DATA_ACTION"
+GATED_ACTION_TYPES = frozenset({ACTION_TYPE_EXTERNAL_WRITE, ACTION_TYPE_SPEND, ACTION_TYPE_PERSONAL_DATA_ACTION})
 
 
 def _found(text: str, terms: list[str]) -> list[str]:
@@ -29,6 +48,31 @@ _NEGATION_RE = re.compile(
     r"chiam\w*|telefon\w*|post\w*|lanci\w*|attiv\w*|avvi\w*)",
     flags=re.IGNORECASE,
 )
+
+
+def classify_action_types(goal_text: str) -> list[str]:
+    """Tassonomia esplicita READ/ANALYZE/CREATE_DRAFT/EXTERNAL_WRITE/SPEND/
+    PERSONAL_DATA_ACTION (fix P0 "separazione PLANNING/EXECUTION"): un
+    obiettivo puo' contenere piu' tipi contemporaneamente. Nessuno di questi
+    tipi blocca la creazione del piano qui — servono solo a marcare quali
+    azioni concrete richiederanno approvazione/Tool Execution Gateway prima
+    di essere eseguite (vedi risk_registry.py e tools/gateway.py)."""
+    raw = (goal_text or "").lower().strip()
+    text_for_ext = _NEGATION_RE.sub(" ", raw)
+    types: list[str] = []
+    if _found(raw, READ_VERBS):
+        types.append(ACTION_TYPE_READ)
+    if _found(raw, ANALYZE_VERBS):
+        types.append(ACTION_TYPE_ANALYZE)
+    if _found(raw, PRODUCTION_VERBS):
+        types.append(ACTION_TYPE_CREATE_DRAFT)
+    if _found(text_for_ext, EXTERNAL_VERBS):
+        types.append(ACTION_TYPE_EXTERNAL_WRITE)
+    if _found(raw, SPEND_TERMS):
+        types.append(ACTION_TYPE_SPEND)
+    if _found(raw, PERSONAL_DATA_TERMS):
+        types.append(ACTION_TYPE_PERSONAL_DATA_ACTION)
+    return types or [ACTION_TYPE_CREATE_DRAFT]
 
 
 def classify_intent(goal_text: str, ai_real_mode: bool = False) -> dict:
@@ -98,4 +142,5 @@ def classify_intent(goal_text: str, ai_real_mode: bool = False) -> dict:
         "ai_classification": ai_classification,
         "requires_external_action": intent in ("AZIONE_ESTERNA", "MISTO"),
         "requires_clarification": intent == "AMBIGUO",
+        "action_types": classify_action_types(goal_text),
     }

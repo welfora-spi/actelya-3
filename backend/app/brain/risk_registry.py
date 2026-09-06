@@ -3,16 +3,23 @@
 Normalizza qualunque rischio (proveniente dalle regole deterministiche di
 domains/intent.py::classify_intent O da una proposta LLM validata) in una
 categoria controllata + un livello di severita', e decide un'azione tra un
-insieme chiuso: BLOCK (nessun piano creato) > APPROVAL (piano creato ma
-richiede approvazione esplicita prima di ogni effetto esterno) >
-CLARIFICATION (serve una domanda prima di procedere) > REVIEW_TASK (piano
-creato, task di revisione aggiunto) > NONE.
+insieme chiuso: BLOCK (l'azione concreta resta bloccata finche' non
+approvata esplicitamente — MAI la creazione del piano, vedi service.py) >
+APPROVAL (piano creato ma richiede approvazione esplicita prima di ogni
+effetto esterno) > CLARIFICATION (serve una domanda prima di procedere) >
+REVIEW_TASK (piano creato, task di revisione aggiunto) > NONE.
+
+Fix P0 "separazione PLANNING/EXECUTION": nessuna di queste azioni impedisce
+piu' la creazione di piano/task/deliverable — quella resta bloccata solo per
+il linguaggio manifestamente illegale/ingannevole intercettato a monte da
+agent_selector.py::precheck_risk_and_domain (denylist). Qui si decide solo
+quanta cautela serve prima dell'effetto ESTERNO REALE corrispondente.
 
 Regola non negoziabile (sezione 10 della specifica): un rischio proposto dal
 modello puo' SOLO aggiungere cautela, mai rimuoverla. Se il gate
-deterministico ha gia' deciso BLOCKED_RISK, nessuna categoria/severita' qui
-puo' mai riportarlo a un esito piu' permissivo — questo modulo viene
-interpellato SOLO per arricchire un esito gia' READY/NEEDS_CLARIFICATION
+deterministico ha gia' deciso BLOCKED_RISK (denylist), nessuna categoria/
+severita' qui puo' mai riportarlo a un esito piu' permissivo — questo modulo
+viene interpellato SOLO per arricchire un esito gia' READY/NEEDS_CLARIFICATION
 deterministico, mai per giudicare se sostituirlo."""
 from __future__ import annotations
 
@@ -31,8 +38,20 @@ _ORDINE_SEVERITA = {"BASSA": 0, "MEDIA": 1, "ALTA": 2}
 # spesa, dati_personali, consenso, irreversibile) sia categorie aggiuntive
 # che una proposta LLM puo' segnalare.
 _AZIONE_BASE: dict[str, str] = {
-    "invio": AZIONE_BLOCK,
-    "azione_esterna_non_autorizzata": AZIONE_BLOCK,
+    # Fix P0 "separazione PLANNING/EXECUTION": un invio richiesto nel testo
+    # (o un'azione esterna generica non altrimenti classificata) non blocca
+    # PIU' la creazione del piano — richiede approvazione esplicita PRIMA
+    # dell'effetto esterno reale (Tool Execution Gateway), esattamente come
+    # spesa/dati_personali qui sotto. Resta bloccante SOLO cio' che e' gia'
+    # intercettato a monte dalla denylist deterministica (illegale/ingannevole,
+    # vedi agent_selector.py::_RISK_DENYLIST_KW) o un'azione IRREVERSIBILE
+    # (cancellazione definitiva): quella resta la sola categoria che la
+    # normalizzazione LLM (llm_validator.py) puo' ancora segnalare come BLOCK,
+    # e anche in quel caso il piano viene comunque creato (vedi service.py) —
+    # solo l'azione irreversibile specifica resta bloccata fino a
+    # un'approvazione esplicita, mai l'intero obiettivo.
+    "invio": AZIONE_APPROVAL,
+    "azione_esterna_non_autorizzata": AZIONE_APPROVAL,
     "irreversibile": AZIONE_BLOCK,
     "spesa": AZIONE_APPROVAL,
     "dati_personali": AZIONE_APPROVAL,

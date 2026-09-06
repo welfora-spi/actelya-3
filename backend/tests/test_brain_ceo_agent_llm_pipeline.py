@@ -265,7 +265,16 @@ def test_budget_assente_su_richiesta_ads_escalation_a_needs_clarification(monkey
     assert run(scenario())
 
 
-def test_rischio_bloccante_dal_llm_produce_blocked_risk(monkeypatch):
+def test_rischio_bloccante_dal_llm_crea_comunque_il_piano_con_rischio_tracciato(monkeypatch):
+    # Fix P0 "separazione PLANNING/EXECUTION": questo test asseriva in
+    # precedenza BLOCKED_RISK/plan=None/piani==0 per una categoria di rischio
+    # BLOCK ("irreversibile") proposta dall'LLM — comportamento riconosciuto
+    # come un bug, perche' impediva la creazione del piano per una rischiosita'
+    # futura invece di limitarsi a bloccare l'azione concreta corrispondente.
+    # Ora il piano viene creato normalmente e la categoria resta tracciata in
+    # risk_flags: l'azione irreversibile specifica resta comunque soggetta ad
+    # approvazione esplicita (ogni task M2 nasce IN_ATTESA_APPROVAZIONE per
+    # costruzione — vedi brain/risk_registry.py e m2/models.py).
     async def scenario():
         client, db = _db()
         org = f"org-test-{uuid.uuid4().hex[:8]}"
@@ -283,12 +292,12 @@ def test_rischio_bloccante_dal_llm_produce_blocked_risk(monkeypatch):
             monkeypatch.setattr(llm_gateway, "ADAPTERS", {**llm_gateway.ADAPTERS, "openai": adapter})
 
             res = await SVC.create_plan_with_brain(db, org, "user-test", FOCACCINE_GOAL)
-            assert res["status"] == "BLOCKED_RISK"
-            assert res["plan"] is None
+            assert res["status"] == "READY"
+            assert res["plan"] is not None
             assert "irreversibile" in res["risk_flags"]
 
             piani = await db.plans.count_documents({"organization_id": org})
-            assert piani == 0  # nessun piano creato: l'escalation ha bloccato PRIMA della creazione
+            assert piani == 1  # piano creato: solo l'azione concreta resta soggetta ad approvazione
             return True
         finally:
             await _cleanup(db, org)

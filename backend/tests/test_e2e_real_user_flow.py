@@ -139,3 +139,99 @@ def test_isolamento_multi_tenant_sul_flusso_completo():
 
     r_lead_b = requests.get(f"{API}/leadgen/campaigns/{lead_campaign_id}", headers=_auth(token_b), timeout=15)
     assert r_lead_b.status_code in (403, 404)
+
+
+# ==================== Regressione P0: separazione PLANNING/EXECUTION ====================
+# Bug reale riscontrato durante un test utente: con questo identico testo,
+# ACTELYA restituiva BLOCKED_RISK (flag dati_personali/invio/spesa) con
+# "Nessun piano creato, nessuna azione eseguita" — comportamento errato,
+# perché la sola menzione futura di un'azione esterna/spesa non deve MAI
+# impedire analisi, creazione del piano, task, lavoro degli agenti o
+# deliverable: deve restare bloccata solo l'azione concreta che richiede
+# autorizzazione (vedi planning/agent_selector.py::precheck_risk_and_domain
+# e brain/risk_registry.py). Questo test usa ESATTAMENTE il testo riportato.
+P0_BUG_GOAL_TEXT = (
+    "Voglio aumentare le vendite di spitool nei prossimi 30 giorni. Analizza le informazioni "
+    "aziendali disponibili, crea un piano operativo, assegna il lavoro agli agenti necessari e "
+    "prepara i contenuti utili. Usa solo dati reali o dichiarati: non inventare informazioni "
+    "mancanti. Prima di qualsiasi azione esterna chiedimi approvazione."
+)
+
+
+def test_regressione_p0_obiettivo_misto_non_blocca_piu_planning():
+    """Nuovo Obiettivo → Brain → piano creato → agenti/task creati →
+    deliverable preparati → nessuna azione esterna eseguita → approval
+    richiesta solo prima dell'azione esterna (mai a monte, sulla sola
+    creazione del piano)."""
+    org_id, token = register_tenant("Regressione P0 Planning Co", password=TEST_PASSWORD)
+    h = _auth(token)
+
+    r = requests.post(f"{API}/brain/plans", headers=h, timeout=30, json={"text": P0_BUG_GOAL_TEXT})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    # Il bug esatto riportato: MAI PIÙ "BLOCKED_RISK"/piano nullo per questo testo.
+    assert body["status"] != "BLOCKED_RISK", body
+    assert body["status"] == "READY", body
+    assert body["plan"] is not None and body["plan"]["id"]
+    assert body["tasks"], "il piano deve contenere almeno un task: gli agenti devono essere assegnati"
+    assert body["activeAgentIds"], "almeno un agente deve essere convocato dal piano"
+    plan_id = body["plan"]["id"]
+
+    # Ogni task nasce IN_ATTESA_APPROVAZIONE (nessuna azione già eseguita):
+    # la separazione PLANNING/EXECUTION è strutturale, non solo dichiarata.
+    for t in body["tasks"]:
+        assert t["task_status"] == "IN_ATTESA_APPROVAZIONE", t
+
+    # Nessuna azione esterna reale è stata eseguita dalla sola creazione del piano.
+    r_del_pre = requests.get(f"{API}/m2/plans/{plan_id}/deliverables", headers=h, timeout=15)
+    assert r_del_pre.status_code == 200, r_del_pre.text
+    assert r_del_pre.json()["deliverables"] == []  # nessun deliverable prodotto prima dell'approvazione
+
+    # L'approvazione è richiesta PRIMA di ogni effetto, mai per creare il piano.
+    r_appr = requests.post(f"{API}/m2/plans/{plan_id}/approve", headers=h, timeout=15)
+    assert r_appr.status_code == 200, r_appr.text
+    assert r_appr.json()["plan_status"] == "APPROVATO"
+
+    r_tick = requests.post(f"{API}/m2/plans/{plan_id}/tick", headers=h, timeout=30)
+    assert r_tick.status_code == 200, r_tick.text
+    tick_body = r_tick.json()
+    assert tick_body["mode"] == "SIMULAZIONE"  # mai un provider esterno reale invocato
+    for risultato in tick_body["results"]:
+        assert risultato["result"] == "completed"
+        assert risultato["deliverable_status"] != "BLOCCATO"
+
+    r_del = requests.get(f"{API}/m2/plans/{plan_id}/deliverables", headers=h, timeout=15)
+    assert r_del.status_code == 200, r_del.text
+    deliverables = r_del.json()["deliverables"]
+    assert deliverables, "il deliverable deve essere preparato dopo approvazione + tick"
+    for d in deliverables:
+        assert d["mode"] == "SIMULAZIONE"  # nessun invio/spesa reale mai eseguito da ACTELYA
+
+
+def test_regressione_p0_rischi_invio_spesa_dati_personali_non_bloccano_il_piano():
+    """Riproduce esattamente la combinazione di risk_flags osservata nel bug
+    reale (dati_personali, invio, spesa): con lo stesso obiettivo, arricchito
+    SOLO con le informazioni che un utente reale fornirebbe rispondendo a un
+    chiarimento del Brain (mai dati inventati dal sistema), il piano deve
+    essere creato normalmente — l'azione di invio/spesa concreta resta
+    comunque soggetta ad approvazione (ogni task M2 nasce
+    IN_ATTESA_APPROVAZIONE), mai la creazione del piano stessa."""
+    org_id, token = register_tenant("Regressione P0 Rischi Co", password=TEST_PASSWORD)
+    h = _auth(token)
+
+    goal_con_rischi = (
+        P0_BUG_GOAL_TEXT + " Per l'azione esterna: invia le email promozionali alla lista contatti "
+        "dei clienti, con un budget di spesa di 300 euro."
+    )
+    r = requests.post(f"{API}/brain/plans", headers=h, timeout=30, json={"text": goal_con_rischi})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert body["status"] != "BLOCKED_RISK", body
+    assert body["status"] == "READY", body
+    assert set(body["risk_flags"]) >= {"dati_personali", "invio", "spesa"}, body["risk_flags"]
+    assert body["plan"] is not None and body["plan"]["id"]
+    assert body["tasks"]
+    for t in body["tasks"]:
+        assert t["task_status"] == "IN_ATTESA_APPROVAZIONE", t
