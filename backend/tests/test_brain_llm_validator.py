@@ -67,14 +67,25 @@ def test_capability_inesistente_scartata_senza_eccezione():
 
 
 def test_capability_predisposta_non_operativa_scartata():
-    """'appointments'/'nurturing' esistono nel registry ma sono PREDISPOSTE
-    (execution_mode UNAVAILABLE, nessun agente M2 operativo ne' producer):
-    esistere nel registry non basta, devono anche essere davvero eseguibili."""
+    """'nurturing' esiste nel registry ma e' PREDISPOSTA (execution_mode
+    UNAVAILABLE, nessun agente M2 operativo ne' producer/dominio reale):
+    esistere nel registry non basta, deve anche essere davvero eseguibile."""
+    proposta = CeoLLMProposal(intent="x", strategia_proposta="y",
+                              capability_richieste=["nurturing"])
+    p = validate_and_normalize(proposta, goal_text="Avvia il nurturing", detected_intents=[])
+    assert p.capability_validate == []
+    assert "nurturing" in p.capability_extra_scartate
+
+
+def test_capability_appointments_e_reale_accettata_se_proposta_da_llm():
+    """Correzione: 'appointments' e' diventata REAL (dominio domains/appointments
+    completo) — una proposta LLM che la richiede deve ora essere accettata,
+    non piu' scartata come le capability predisposte."""
     proposta = CeoLLMProposal(intent="x", strategia_proposta="y",
                               capability_richieste=["appointments"])
     p = validate_and_normalize(proposta, goal_text="Fissa degli appuntamenti", detected_intents=[])
-    assert p.capability_validate == []
-    assert "appointments" in p.capability_extra_scartate
+    assert "appointments" in p.capability_validate
+    assert "appointments" not in p.capability_extra_scartate
 
 
 def test_task_su_capability_reale_non_rilevata_da_keyword_mantenuto():

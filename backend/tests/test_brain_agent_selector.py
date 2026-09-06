@@ -80,20 +80,19 @@ def test_strategia_e_piano_editoriale():
 
 
 # ---------------- 5. lead generation più appuntamenti ----------------
-# NOTA (Blocco B.1): "appointments" e' UNAVAILABLE (nessun producer M2 ne'
-# di simulazione) -> combinata con "leadgen" (eseguibile) produce
-# NEEDS_CLARIFICATION, mai un piano parziale silenzioso. Il caso "leadgen
-# da solo" (READY, un solo agente) e' coperto separatamente in
-# test_brain_agent_selector_b1.py.
-def test_lead_generation_e_appuntamenti_richiede_chiarimento():
+# Correzione (appointments e' diventata REAL, non più UNAVAILABLE: dominio
+# domains/appointments completo): "leadgen" + "appointments" sono entrambe
+# eseguibili oggi, quindi la richiesta combinata produce READY con
+# entrambi gli agenti attivi, mai più un chiarimento forzato.
+def test_lead_generation_e_appuntamenti_sono_entrambe_eseguibili():
     testo = (
         "Trova potenziali clienti e prepara un processo per ottenere appuntamenti, "
         "per pubblicizzare le focaccine artigianali del Bakery & Coffee di Merate."
     )
     r = select_agents(testo)
-    assert r.status == STATUS_NEEDS_CLARIFICATION
-    assert r.activeAgentIds == []
-    assert r.unavailable_capabilities == ["appointments"]
+    assert r.status == STATUS_READY
+    assert set(r.activeAgentIds) == {"lead-gen-specialist", "appointment-setter"}
+    assert r.unavailable_capabilities == []
 
 
 # ---------------- 6. richiesta completa multi-intento ----------------

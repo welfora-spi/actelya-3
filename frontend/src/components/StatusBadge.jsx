@@ -21,6 +21,10 @@ const MAP = {
   NON_CONFIGURATA: "bg-slate-500/15 text-slate-400 border-slate-500/30",
   CONFIGURATA: "bg-blue-500/15 text-blue-400 border-blue-500/30",
   VERIFICATA: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  // stessi stati, forma maschile (Professional Tool Registry, domains/appointments)
+  NON_CONFIGURATO: "bg-slate-500/15 text-slate-400 border-slate-500/30",
+  CONFIGURATO: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  VERIFICATO: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
   ERRORE: "bg-red-500/15 text-red-400 border-red-500/30",
   DISATTIVATA: "bg-slate-600/15 text-slate-500 border-slate-600/30 line-through",
   // approval
@@ -83,6 +87,22 @@ const MAP = {
   EXCLUDED: "bg-zinc-600/15 text-zinc-400 border-zinc-600/30",
   DO_NOT_CONTACT: "bg-red-500/15 text-red-400 border-red-500/30",
   APPROVAL_REQUIRED: "bg-violet-500/15 text-violet-400 border-violet-500/30",
+  // Content Creator: domains/content_creator (content_items)
+  IN_ATTESA_ASSET: "bg-teal-500/15 text-teal-400 border-teal-500/30 animate-pulse",
+  // Sales Agent: domains/sales (sales_opportunities, pipeline stages)
+  NUOVO: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+  IN_ANALISI: "bg-blue-500/15 text-blue-400 border-blue-500/30 animate-pulse",
+  QUALIFICATO: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  CONTATTATO: "bg-teal-500/15 text-teal-400 border-teal-500/30",
+  IN_RELAZIONE: "bg-teal-500/15 text-teal-400 border-teal-500/30",
+  FOLLOW_UP: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  RICHIESTA_APPUNTAMENTO: "bg-violet-500/15 text-violet-400 border-violet-500/30",
+  APPUNTAMENTO_FISSATO: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  OPPORTUNITA: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  PROPOSTA: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  NEGOZIAZIONE: "bg-emerald-600/15 text-emerald-400 border-emerald-600/30",
+  VINTO: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold",
+  PERSO: "bg-zinc-600/15 text-zinc-400 border-zinc-600/30 line-through",
 };
 
 export function StatusBadge({ status, className, testid }) {

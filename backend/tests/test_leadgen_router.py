@@ -9,27 +9,17 @@ un controllo di sicurezza legittimo, mai indebolito per comodita' dei test).
 Un secondo tenant viene registrato SOLO dal test che verifica davvero
 l'isolamento multi-organizzazione."""
 import time
-import uuid
 
 import pytest
 import requests
 
-from conftest import API_URL as API
+from conftest import API_URL as API, register_tenant
 
 TEST_PASSWORD = "LeadGenTest!2026x"
 
 
 def _register(company_name="Lead Gen Test Co"):
-    email = f"test_{uuid.uuid4().hex[:12]}@example.com"
-    body = {
-        "company_name": company_name, "sector": "Servizi", "website": "https://example.com",
-        "social_links": [], "primary_goal": "Crescere",
-        "first_name": "Test", "last_name": "User", "email": email, "password": TEST_PASSWORD,
-    }
-    r = requests.post(f"{API}/tenant/register", json=body, timeout=15)
-    assert r.status_code == 200, r.text
-    data = r.json()
-    return data["organization_id"], data["access_token"]
+    return register_tenant(company_name, password=TEST_PASSWORD)
 
 
 @pytest.fixture(scope="module")

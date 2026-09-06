@@ -34,7 +34,22 @@ _EMAIL_KW = [r"\bemail\b", r"\be-mail\b", r"\bnewsletter\b"]
 _ADS_KW = [r"campagna pubblicitaria", r"campagna ads", r"\badvertising\b", r"sponsorizzat", r"annunci a pagamento", r"campagna a pagamento", r"\bads\b"]
 _LEADGEN_KW = [r"lead generation", r"lead gen\b", r"trova client", r"potenziali client", r"acquisizione client", r"nuovi client", r"genera lead", r"generazione di lead"]
 _APPOINTMENT_KW = [r"appuntament", r"prenotazion", r"fissare una call", r"ottenere appuntamenti"]
+_SALES_KW = [
+    r"pipeline (?:di |commerciale)?vendita", r"pipeline commerciale", r"trattativ[ae]",
+    r"opportunit[aà] commercial", r"obiezion[ei] (?:di|sul) prezzo", r"chiudere (?:una |la )?vendita",
+    r"gestione (?:dei |del )?prospect", r"prossima azione commerciale", r"follow-?up commerciale",
+]
 _NURTURING_KW = [r"\bnurturing\b", r"follow-up dei lead", r"coltivare i lead", r"mantenere il contatto con i lead"]
+# Content Creator (nuovo agente consolidato): SOLO i formati non gia'
+# coperti da una capability esistente (social/editorial/email/ads/
+# flyer_image/video_reel/audio_voiceover, invariate — mai una sovrapposizione
+# con 'newsletter' di _EMAIL_KW, deliberatamente esclusa da qui).
+_CONTENT_CREATOR_KW = [
+    r"landing page", r"pagina di atterraggio", r"copy (?:per|della) landing",
+    r"\barticolo\b", r"\bblog\b", r"contenuto seo", r"\bseo\b",
+    r"comunicazione commerciale", r"\bofferta\b", r"promozione commerciale",
+    r"\bcarosello\b", r"contenuto informativo",
+]
 _ANALYTICS_KW = [r"\bkpi\b", r"\bperformance\b", r"risultati della campagna", r"analizza", r"analisi dei risultati", r"\breport\b"]
 # Distinta da 'social' (post statici): richiede un segnale esplicito di
 # VIDEO/reel, mai il solo canale ("Instagram" da solo resta 'social' -- vedi
@@ -102,7 +117,7 @@ _RISK_DENYLIST_KW = [
 # quindi la Compliance va convocata anche per una richiesta di solo flyer o
 # solo reel (mai solo per i formati testuali nativi di M2).
 _CONTENT_FACING_CAPABILITIES = {
-    "editorial", "social", "ads", "email", "flyer_image", "video_reel", "audio_voiceover",
+    "editorial", "social", "ads", "email", "flyer_image", "video_reel", "audio_voiceover", "content",
 }
 
 STATUS_READY = "READY"
@@ -178,8 +193,12 @@ def detect_capabilities(goal_text: str) -> list[str]:
         trovate.append("leadgen")
     if _match_any(testo, _APPOINTMENT_KW):
         trovate.append("appointments")
+    if _match_any(testo, _SALES_KW):
+        trovate.append("sales")
     if _match_any(testo, _NURTURING_KW):
         trovate.append("nurturing")
+    if _match_any(testo, _CONTENT_CREATOR_KW):
+        trovate.append("content")
 
     visti = set()
     ordinate = []

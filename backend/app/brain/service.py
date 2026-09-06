@@ -99,6 +99,8 @@ from ..domains.knowledge import current_facts_map
 from ..domains import reel as reel_domain
 from ..domains import flyer as flyer_domain
 from ..domains.leadgen import router as leadgen_router
+from ..domains.content_creator import pipeline as content_creator_pipeline
+from ..domains.analyst import pipeline as analyst_pipeline
 from fastapi import HTTPException
 
 _ACTOR_SELECTOR = "brain.planning.agent_selector"
@@ -175,7 +177,6 @@ _M2_NATIVE_DELIVERABLE = {
     "editorial": "editorial_plan",
     "social": "social_content",
     "ads": "ad_campaign_draft",
-    "analytics": "kpi_report",
     "email": "email",
 }
 
@@ -892,6 +893,131 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
                  reason="Task 'lead_gen_campaign' aggiunto al piano M2, collegato alla campagna reale in domains/leadgen.",
                  goal_id=goal_id, plan_id=plan["id"],
                  metadata={"task_id": leadgen_task["id"], "lead_campaign_id": lead_campaign["id"]})
+
+    # Stesso pattern, capability REALE 'appointments' (Appointment Setter):
+    # a differenza di leadgen/reel/flyer non esiste un "contenitore" da
+    # creare subito (una proposta richiede un lead specifico gia' scelto,
+    # azione dell'utente nel laboratorio, non derivabile dal solo testo
+    # dell'obiettivo) — il task collega quindi al laboratorio in generale,
+    # senza inventare una proposta/prenotazione.
+    if "appointments" in selection.detected_intents:
+        appt_mapping = mapping_by_capability("appointments")
+        ultimo = await db.tasks.find({"plan_id": plan["id"]}).sort("seq", -1).to_list(1)
+        seq = (ultimo[0]["seq"] + 1) if ultimo else 1
+        appt_task = new_task(
+            org_id, user_id, plan["id"], goal_id, plan["version"], seq,
+            name="Appointment Setter — proposta e prenotazione",
+            agent_id=appt_mapping.frontend_agent_id if appt_mapping else "appointment-setter",
+            deliverable_type="appointment_setter_task",
+            inputs={"cost": 0.0, "deliverable_override": {
+                "mode": "REALE",
+                "note": "Seleziona un lead approvato e una connessione calendario in Appointment Setter — laboratorio.",
+            }},
+            depends_on=[],
+        )
+        await db.tasks.insert_one(appt_task)
+        await db.plans.update_one({"id": plan["id"]}, {"$push": {
+            "dag.nodes": appt_task["id"], "topo_order": appt_task["id"],
+        }})
+        _log(EVENT_PLAN_ALLOWED, actor=_ACTOR_SERVICE, decision="APPOINTMENT_TASK_LINKED",
+             reason="Task 'appointment_setter_task' aggiunto al piano M2, collegato al laboratorio reale in domains/appointments.",
+             goal_id=goal_id, plan_id=plan["id"], metadata={"task_id": appt_task["id"]})
+
+    # Stesso pattern di 'appointments': nessun "contenitore" da creare subito
+    # (un'opportunità richiede un lead specifico già pronto per l'handoff,
+    # next_action == PRONTO_PER_SALES, azione dell'utente nel laboratorio, non
+    # derivabile dal solo testo dell'obiettivo) — il task collega quindi al
+    # laboratorio in generale, senza inventare un'opportunità.
+    if "sales" in selection.detected_intents:
+        sales_mapping = mapping_by_capability("sales")
+        ultimo = await db.tasks.find({"plan_id": plan["id"]}).sort("seq", -1).to_list(1)
+        seq = (ultimo[0]["seq"] + 1) if ultimo else 1
+        sales_task = new_task(
+            org_id, user_id, plan["id"], goal_id, plan["version"], seq,
+            name="Sales Agent — pipeline commerciale",
+            agent_id=sales_mapping.frontend_agent_id if sales_mapping else "sales-agent",
+            deliverable_type="sales_opportunity",
+            inputs={"cost": 0.0, "deliverable_override": {
+                "mode": "REALE",
+                "note": "Seleziona un lead pronto per l'handoff (PRONTO_PER_SALES) in Sales — laboratorio.",
+            }},
+            depends_on=[],
+        )
+        await db.tasks.insert_one(sales_task)
+        await db.plans.update_one({"id": plan["id"]}, {"$push": {
+            "dag.nodes": sales_task["id"], "topo_order": sales_task["id"],
+        }})
+        _log(EVENT_PLAN_ALLOWED, actor=_ACTOR_SERVICE, decision="SALES_TASK_LINKED",
+             reason="Task 'sales_opportunity' aggiunto al piano M2, collegato al laboratorio reale in domains/sales.",
+             goal_id=goal_id, plan_id=plan["id"], metadata={"task_id": sales_task["id"]})
+
+    # Stesso pattern REALE di leadgen: un content_item BOZZA reale (objective
+    # = testo dell'obiettivo) e' creato subito, pronto per essere generato nel
+    # laboratorio Content Creator — mai un contenuto gia' generato qui (la
+    # generazione e' sempre un'azione esplicita e confermata, mai automatica).
+    if "content" in selection.detected_intents:
+        try:
+            risultato_content = await content_creator_pipeline.create_content_item(
+                db, org_id=org_id, actor=user_id, objective=goal_text, channel="generico",
+                funnel_stage="MOFU", content_type=None, campaign_id=None, tone_override=None,
+                constraints="", brief=goal_text,
+            )
+        except ValueError as exc:
+            _log(EVENT_ERROR_FALLBACK, actor=_ACTOR_SERVICE, decision="FALLBACK_M2_DEFAULT",
+                 reason=f"Task 'content' non aggiunto al piano: {exc}",
+                 goal_id=goal_id, plan_id=plan["id"], metadata={"detail": str(exc)})
+        else:
+            content_mapping = mapping_by_capability("content")
+            ultimo = await db.tasks.find({"plan_id": plan["id"]}).sort("seq", -1).to_list(1)
+            seq = (ultimo[0]["seq"] + 1) if ultimo else 1
+            content_task = new_task(
+                org_id, user_id, plan["id"], goal_id, plan["version"], seq,
+                name="Content Creator — produzione contenuti",
+                agent_id=content_mapping.frontend_agent_id if content_mapping else "content-creator",
+                deliverable_type="content_item",
+                inputs={"cost": 0.0, "deliverable_override": {
+                    "content_item_ids": [i["id"] for i in risultato_content["items"]], "mode": "REALE",
+                    "note": "Genera e approva il contenuto in Content Creator — laboratorio.",
+                }},
+                depends_on=[],
+            )
+            await db.tasks.insert_one(content_task)
+            await db.plans.update_one({"id": plan["id"]}, {"$push": {
+                "dag.nodes": content_task["id"], "topo_order": content_task["id"],
+            }})
+            _log(EVENT_PLAN_ALLOWED, actor=_ACTOR_SERVICE, decision="CONTENT_TASK_LINKED",
+                 reason="Task 'content_item' aggiunto al piano M2, collegato al laboratorio reale in domains/content_creator.",
+                 goal_id=goal_id, plan_id=plan["id"],
+                 metadata={"task_id": content_task["id"], "content_item_ids": [i["id"] for i in risultato_content["items"]]})
+
+    # Stesso pattern REALE di leadgen/content: un report REALE (dati gia'
+    # presenti, mai inventati) e' calcolato subito, con time_range_days di
+    # default — l'utente puo' rigenerarlo con un intervallo diverso nel
+    # laboratorio Analyst.
+    if "analytics" in selection.detected_intents:
+        report = await analyst_pipeline.compute_report(db, org_id=org_id, time_range_days=30, actor=user_id)
+        analytics_mapping = mapping_by_capability("analytics")
+        ultimo = await db.tasks.find({"plan_id": plan["id"]}).sort("seq", -1).to_list(1)
+        seq = (ultimo[0]["seq"] + 1) if ultimo else 1
+        analytics_task = new_task(
+            org_id, user_id, plan["id"], goal_id, plan["version"], seq,
+            name="Analista performance — report KPI",
+            agent_id=analytics_mapping.frontend_agent_id if analytics_mapping else "analista-performance",
+            deliverable_type="analyst_report",
+            inputs={"cost": 0.0, "deliverable_override": {
+                "analyst_report_id": report["id"], "mode": "REALE",
+                "note": "Consulta il report e gli insight in Analyst — laboratorio.",
+            }},
+            depends_on=[],
+        )
+        await db.tasks.insert_one(analytics_task)
+        await db.plans.update_one({"id": plan["id"]}, {"$push": {
+            "dag.nodes": analytics_task["id"], "topo_order": analytics_task["id"],
+        }})
+        _log(EVENT_PLAN_ALLOWED, actor=_ACTOR_SERVICE, decision="ANALYTICS_TASK_LINKED",
+             reason="Task 'analyst_report' aggiunto al piano M2, collegato al laboratorio reale in domains/analyst.",
+             goal_id=goal_id, plan_id=plan["id"],
+             metadata={"task_id": analytics_task["id"], "analyst_report_id": report["id"]})
 
     tasks = await db.tasks.find({"plan_id": plan["id"]}, {"_id": 0}).sort("seq", 1).to_list(200)
 

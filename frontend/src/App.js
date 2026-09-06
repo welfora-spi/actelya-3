@@ -21,6 +21,11 @@ import Agents from "@/pages/Agents";
 import Connections from "@/pages/Connections";
 import ReelStudio from "@/pages/ReelStudio";
 import LeadGeneration from "@/pages/LeadGeneration";
+import AppointmentSetter from "@/pages/AppointmentSetter";
+import ContentCreator from "@/pages/ContentCreator";
+import Sales from "@/pages/Sales";
+import Analyst from "@/pages/Analyst";
+import ToolRegistry from "@/pages/ToolRegistry";
 import OrgProfile from "@/pages/OrgProfile";
 import Users from "@/pages/Users";
 import Budget from "@/pages/Budget";
@@ -67,6 +72,11 @@ const routes = [
   ["/connessioni", <Connections />, ADMIN_ONLY],
   ["/reel", <ReelStudio />, ADMIN_ONLY],
   ["/lead-generation", <LeadGeneration />, ADMIN_ONLY],
+  ["/appointment-setter", <AppointmentSetter />, ADMIN_ONLY],
+  ["/content-creator", <ContentCreator />, ADMIN_ONLY],
+  ["/sales", <Sales />, ADMIN_ONLY],
+  ["/analyst", <Analyst />, ADMIN_ONLY],
+  ["/strumenti", <ToolRegistry />, ADMIN_ONLY],
   ["/profilo", <OrgProfile />, ADMIN_ONLY],
   ["/utenti", <Users />, ADMIN_ONLY],
   ["/budget", <Budget />, ADMIN_ONLY],

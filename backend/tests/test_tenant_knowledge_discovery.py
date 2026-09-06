@@ -7,22 +7,18 @@ import uuid
 import requests
 import pytest
 
-from conftest import API_URL as API
+from conftest import API_URL as API, register_tenant
 
 TEST_PASSWORD = "TenantTest!2026x"
 
 
 def _register(company_name, sector="Test", website="https://example.com", social=None, goal="Crescere"):
     email = f"test_{uuid.uuid4().hex[:12]}@example.com"
-    body = {
-        "company_name": company_name, "sector": sector, "website": website,
-        "social_links": social or [], "primary_goal": goal,
-        "first_name": "Test", "last_name": "User", "email": email, "password": TEST_PASSWORD,
-    }
-    r = requests.post(f"{API}/tenant/register", json=body, timeout=15)
-    assert r.status_code == 200, r.text
-    data = r.json()
-    return data["organization_id"], data["access_token"], email
+    org_id, token = register_tenant(
+        company_name, password=TEST_PASSWORD, sector=sector, website=website,
+        social_links=social, goal=goal, email=email,
+    )
+    return org_id, token, email
 
 
 def _auth(token):

@@ -131,6 +131,42 @@ export const AGENT_REGISTRY = [
     seat_id: "right-4",
     z_index: 8,
   },
+  {
+    // NOTA PROVVISORIA: nessuna postazione fisica libera nel layout attuale
+    // (9/9 già occupate) e "content" (capability del nuovo Content Creator)
+    // può risultare attivo contemporaneamente a "social"/"video_reel"/"ads"
+    // (a differenza delle coppie condivise sopra, che sono deliberatamente
+    // mutuamente esclusive) — riuso della postazione di "copywriter" solo
+    // per non lasciare l'agente privo di rappresentazione visiva: quando
+    // entrambi risultano attivi sulla stessa richiesta, le due targhette si
+    // sovrappongono. Da rivedere con una postazione dedicata quando il
+    // layout della Sala Riunioni viene ricalibrato (fuori scope qui: nessuna
+    // ricalibrazione del layout esistente in questa fase).
+    agent_id: "content-creator",
+    role_name: "Content Creator",
+    short_label: "Content Creator",
+    person_asset: null,
+    label_position: { top: "38.05%", left: "78.82%" },
+    seat_id: "right-3",
+    z_index: 6,
+  },
+  {
+    // NOTA PROVVISORIA (stesso compromesso di "content-creator" sopra):
+    // nessuna postazione fisica libera. "sales" può in teoria coincidere con
+    // "leadgen" sulla stessa richiesta, ma nella pratica una richiesta che
+    // parla di pipeline/trattativa/obiezioni riguarda quasi sempre un lead
+    // già acquisito, non una nuova ricerca — rischio di sovrapposizione
+    // visiva più basso rispetto alle altre postazioni disponibili, non
+    // nullo. Da rivedere con una postazione dedicata in un futuro
+    // ricalibramento del layout (fuori scope qui).
+    agent_id: "sales-agent",
+    role_name: "Sales Agent",
+    short_label: "Sales",
+    person_asset: null,
+    label_position: { top: "28.01%", left: "31.24%" },
+    seat_id: "left-4",
+    z_index: 3,
+  },
 ];
 
 // Coordinatore ACTELYA: presenza digitale sullo schermo, separata, sempre

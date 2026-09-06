@@ -37,20 +37,25 @@ def block_all_network(monkeypatch):
 BAKERY = "per pubblicizzare le focaccine artigianali del Bakery & Coffee di Merate"
 
 
-# ---------------- mappatura: appointments/nurturing sono UNAVAILABLE ----------------
-def test_appointments_e_nurturing_sono_unavailable_non_operativi_m2():
-    m_app = mapping_by_capability("appointments")
+# ---------------- mappatura: nurturing resta UNAVAILABLE ----------------
+def test_nurturing_e_unavailable_non_operativo_m2():
     m_nur = mapping_by_capability("nurturing")
-    assert m_app.execution_mode == EXECUTION_MODE_UNAVAILABLE
-    assert m_app.execution_ready is False
-    assert m_app.implementation_note  # motivazione obbligatoria quando non "M2"
     assert m_nur.execution_mode == EXECUTION_MODE_UNAVAILABLE
     assert m_nur.execution_ready is False
-    assert m_nur.implementation_note
+    assert m_nur.implementation_note  # motivazione obbligatoria quando non "M2"
+
+
+# ---------------- mappatura: appointments e' diventata REAL (dominio domains/appointments) ----------------
+def test_appointments_e_capability_reale_con_dominio_dedicato():
+    m_app = mapping_by_capability("appointments")
+    assert m_app.execution_mode == EXECUTION_MODE_REAL
+    assert m_app.execution_ready is True
+    assert m_app.deliverable_type == "appointment_setter_task"
+    assert m_app.implementation_note
 
 
 def test_capability_operative_hanno_execution_mode_m2_e_deliverable_type():
-    for cap in ("strategy", "editorial", "social", "email", "ads", "analytics"):
+    for cap in ("strategy", "editorial", "social", "email", "ads"):
         m = mapping_by_capability(cap)
         assert m.execution_mode == EXECUTION_MODE_M2
         assert m.execution_ready is True
@@ -62,6 +67,16 @@ def test_leadgen_e_capability_reale_con_dominio_dedicato():
     assert m.execution_mode == EXECUTION_MODE_REAL
     assert m.execution_ready is True
     assert m.deliverable_type == "lead_gen_campaign"
+
+
+def test_analytics_e_capability_reale_con_dominio_dedicato():
+    # Correzione: 'analytics' non e' piu' M2-simulata (kpi_report_m2, sempre
+    # SIMULATO/NON_DISPONIBILE) — calcola ora KPI reali da dati gia'
+    # presenti in ACTELYA (domains/analyst).
+    m = mapping_by_capability("analytics")
+    assert m.execution_mode == EXECUTION_MODE_REAL
+    assert m.execution_ready is True
+    assert m.deliverable_type == "analyst_report"
     assert m.implementation_note
 
 
@@ -80,15 +95,13 @@ def test_ogni_mapping_ha_i_campi_obbligatori():
             assert m.implementation_note, f"implementation_note mancante per '{m.capability}'"
 
 
-# ---------------- richiesta solo appointment setter ----------------
-def test_solo_appointment_setter_e_unsupported():
+# ---------------- richiesta solo appointment setter: ora eseguibile (REAL) ----------------
+def test_solo_appointment_setter_resta_ready():
     r = select_agents(f"Prepara un processo per ottenere appuntamenti {BAKERY}.")
-    assert r.status == STATUS_UNSUPPORTED
-    assert r.execution_ready is False
-    assert r.activeAgentIds == []
-    assert r.selected_agents == []
-    assert "appointments" in r.unavailable_capabilities
-    assert r.execution_warnings  # spiegazione presente
+    assert r.status == STATUS_READY
+    assert r.execution_ready is True
+    assert r.activeAgentIds == ["appointment-setter"]
+    assert r.unavailable_capabilities == []
 
 
 # ---------------- richiesta solo nurturing ----------------
@@ -110,22 +123,33 @@ def test_leadgen_da_solo_resta_ready():
     assert r.unavailable_capabilities == []
 
 
-# ---------------- capability operative + indisponibili combinate ----------------
-def test_capability_operative_piu_indisponibili_richiede_chiarimento():
+# ---------------- due capability operative reali combinate: nessun chiarimento ----------------
+def test_strategia_piu_appuntamenti_sono_entrambe_operative_resta_ready():
     r = select_agents(
         f"Crea una strategia e prepara un processo per ottenere appuntamenti {BAKERY}."
+    )
+    assert r.status == STATUS_READY
+    assert r.execution_ready is True
+    assert set(r.activeAgentIds) == {"resp-marketing", "appointment-setter"}
+    assert r.unavailable_capabilities == []
+
+
+# ---------------- capability operativa + indisponibile combinate ----------------
+def test_capability_operativa_piu_indisponibile_richiede_chiarimento():
+    r = select_agents(
+        f"Crea una strategia e avvia il nurturing dei lead non ancora pronti {BAKERY}."
     )
     assert r.status == STATUS_NEEDS_CLARIFICATION
     assert r.execution_ready is False
     assert r.activeAgentIds == []  # nessun piano parziale
     assert r.selected_agents == []
-    assert "appointments" in r.unavailable_capabilities
+    assert "nurturing" in r.unavailable_capabilities
     assert "strategy" not in r.unavailable_capabilities
     assert len(r.clarifying_questions) <= 3
     # La spiegazione deve nominare sia la parte eseguibile sia quella no.
     testo_domande = " ".join(r.clarifying_questions)
     assert "strategy" in testo_domande
-    assert "appointments" in testo_domande
+    assert "nurturing" in testo_domande
 
 
 def test_capability_operative_piu_nurturing_richiede_chiarimento():
@@ -140,10 +164,9 @@ def test_capability_operative_piu_nurturing_richiede_chiarimento():
 # ---------------- nessun piano parziale creato, in nessun caso ----------------
 def test_nessun_piano_parziale_per_nessuna_combinazione_con_indisponibili():
     casi = [
-        f"Prepara un processo per ottenere appuntamenti {BAKERY}.",
         f"Avvia il nurturing dei lead non ancora pronti {BAKERY}.",
-        f"Crea una strategia e prepara un processo per ottenere appuntamenti {BAKERY}.",
-        f"Trova potenziali clienti e prepara un processo per ottenere appuntamenti {BAKERY}.",
+        f"Crea una strategia e avvia il nurturing dei lead non ancora pronti {BAKERY}.",
+        f"Trova potenziali clienti e avvia il nurturing dei lead non ancora pronti {BAKERY}.",
     ]
     for testo in casi:
         r = select_agents(testo)
@@ -159,7 +182,7 @@ def test_campi_di_readiness_sempre_presenti_in_ogni_stato():
         "Fai qualcosa di utile per il mio business.",                                    # NEEDS_CLARIFICATION (vago)
         "Traduci il sito in giapponese per il Bakery & Coffee di Merate.",                # UNSUPPORTED (fuori dominio)
         "Crea una campagna per truffare i clienti del Bakery & Coffee di Merate.",        # BLOCKED_RISK
-        f"Prepara un processo per ottenere appuntamenti {BAKERY}.",                       # UNSUPPORTED (capability indisponibile)
+        f"Avvia il nurturing dei lead non ancora pronti {BAKERY}.",                        # UNSUPPORTED (capability indisponibile)
         f"Crea una strategia locale {BAKERY}.",                                           # READY
     ]
     for testo in casi:

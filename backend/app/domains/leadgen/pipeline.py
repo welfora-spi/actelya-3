@@ -17,7 +17,9 @@ import logging
 from ...models import new_id, now_iso
 from .compliance import evaluate_compliance
 from .dedup import apply_merge, find_exact_duplicates, find_probable_duplicates
+from .enrichment import apply_enrichment_result, rescore_after_enrichment
 from .mapping import apply_mapping
+from .next_action import decide_next_action
 from .normalize import normalize_record
 from .scoring import score_record
 
@@ -104,6 +106,8 @@ async def run_import_job(db, job: dict) -> None:
             decisione = evaluate_compliance(record, is_person=is_person)
             esito = score_record(record, icp, is_person=is_person, compliance_status=decisione.status,
                                  exclude_existing_customers=escludi_clienti)
+            azione = decide_next_action(qualification_status=esito.qualification_status,
+                                        missing_data=esito.dati_mancanti, record=record)
             documento = {
                 **record, "organization_id": org_id, "campaign_id": job.get("campaign_id"),
                 "import_job_id": job_id, "is_person": is_person,
@@ -111,7 +115,8 @@ async def run_import_job(db, job: dict) -> None:
                 "confidence": esito.confidence, "missing_data": esito.dati_mancanti,
                 "qualification_status": esito.qualification_status,
                 "compliance_status": decisione.status, "compliance_motivi": decisione.motivi,
-                "rules_applied": esito.regole_applicate, "merge_history": [], "merged_from_ids": [],
+                "rules_applied": esito.regole_applicate, "next_action": azione,
+                "merge_history": [], "merged_from_ids": [],
                 "created_at": now_iso(), "created_by": actor_id, "updated_at": now_iso(),
             }
             collezione = db.lead_persons if is_person else db.lead_companies
@@ -168,6 +173,71 @@ async def apply_merge_decision(db, review: dict, *, action: str, actor: str) -> 
                   "decided_by": actor, "decided_at": now_iso()}},
     )
     return {"id": review["id"], "status": "MERGED" if action == "MERGE" else "KEPT_SEPARATE"}
+
+
+async def request_enrichment(db, *, org_id: str, lead_type: str, lead_id: str, actor: str) -> dict:
+    """Crea una richiesta esplicita di arricchimento per un lead con dati
+    mancanti, con le capability ASTRATTE necessarie (next_action.py — mai un
+    nome di provider). Resta IN_ATTESA finché un adapter reale (quando un
+    provider sarà collegato al Tool Registry) o un adapter di test (nei
+    test) non produce un risultato da applicare con
+    apply_enrichment_result_for_lead()."""
+    if lead_type not in ("aziende", "persone"):
+        raise ValueError(f"Tipo di lead sconosciuto: '{lead_type}'.")
+    collezione = db.lead_persons if lead_type == "persone" else db.lead_companies
+    lead = await collezione.find_one({"id": lead_id, "organization_id": org_id}, {"_id": 0})
+    if not lead:
+        raise ValueError("Lead non trovato.")
+    capability = (lead.get("next_action") or {}).get("capability_richieste") or []
+    if not capability:
+        raise ValueError("Nessuna capability di arricchimento necessaria per questo lead (vedi next_action).")
+    richiesta = {
+        "id": new_id("enrich"), "organization_id": org_id, "lead_type": lead_type, "lead_id": lead_id,
+        "capability_richieste": capability, "status": "IN_ATTESA", "conflitti": [],
+        "created_by": actor, "created_at": now_iso(), "updated_at": now_iso(),
+        "fulfilled_at": None, "result_source": None,
+    }
+    await db.lead_enrichment_requests.insert_one(richiesta)
+    return {k: v for k, v in richiesta.items() if k != "_id"}
+
+
+async def apply_enrichment_result_for_lead(db, request: dict, *, result_fields: dict, source: str, actor: str) -> dict:
+    """Applica il risultato di un arricchimento (oggi sempre da un adapter di
+    TEST — nessun provider reale collegato in questa fase, vedi
+    enrichment.py) a un lead: valida/normalizza/rileva conflitti, ricalcola
+    scoring e prossima azione, marca la richiesta COMPLETATA. Questa logica
+    resta identica quando un adapter reale (Apollo/Hunter/...) sarà
+    collegato al Tool Registry: cambia solo la provenienza di result_fields."""
+    if request["status"] != "IN_ATTESA":
+        raise ValueError(f"Richiesta già evasa (stato attuale: {request['status']}).")
+    lead_type = request["lead_type"]
+    collezione = db.lead_persons if lead_type == "persone" else db.lead_companies
+    lead = await collezione.find_one(
+        {"id": request["lead_id"], "organization_id": request["organization_id"]}, {"_id": 0})
+    if not lead:
+        raise ValueError("Lead non trovato.")
+
+    esito = apply_enrichment_result(lead, result_fields=result_fields, source_method="ESTRATTO")
+    aggiornato = esito["record"]
+    campagna = await db.lead_campaigns.find_one({"id": lead.get("campaign_id")}, {"_id": 0}) or {}
+    ricalcolo = rescore_after_enrichment(
+        aggiornato, icp=campagna.get("icp") or {}, is_person=lead.get("is_person", False),
+        exclude_existing_customers=campagna.get("exclude_existing_customers", True),
+    )
+    aggiornato.update(ricalcolo)
+    aggiornato["updated_at"] = now_iso()
+    await collezione.update_one({"id": lead["id"]}, {"$set": aggiornato})
+
+    await db.lead_enrichment_requests.update_one(
+        {"id": request["id"]},
+        {"$set": {"status": "COMPLETATA", "fulfilled_at": now_iso(), "result_source": source,
+                  "conflitti": esito["conflitti"], "updated_at": now_iso()}},
+    )
+    return {
+        "lead": await collezione.find_one({"id": lead["id"]}, {"_id": 0}),
+        "conflitti": esito["conflitti"],
+        "request": await db.lead_enrichment_requests.find_one({"id": request["id"]}, {"_id": 0}),
+    }
 
 
 async def worker_loop(db) -> None:

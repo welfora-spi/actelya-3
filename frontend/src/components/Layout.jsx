@@ -7,7 +7,7 @@ import { formatBudgetLine } from "@/lib/budget";
 import {
   LayoutDashboard, Target, CheckSquare, PlayCircle, FileText, Bot, Plug,
   Building2, Users, Wallet, ScrollText, Settings as SettingsIcon, LogOut, ShieldAlert, FlaskConical, Network, Presentation,
-  BookOpen, Clapperboard, UserSearch,
+  BookOpen, Clapperboard, UserSearch, CalendarClock, Wrench, PenSquare, Handshake, LineChart,
 } from "lucide-react";
 
 // "Esecuzioni" e "Centro Approvazioni" (vecchio flusso M1) sono rimaste
@@ -40,6 +40,11 @@ const NAV = [
   { to: "/connessioni", label: "Connessioni e API", icon: Plug, adminOnly: true },
   { to: "/reel", label: "Reel — laboratorio", icon: Clapperboard, adminOnly: true },
   { to: "/lead-generation", label: "Lead Generation — laboratorio", icon: UserSearch, adminOnly: true },
+  { to: "/appointment-setter", label: "Appointment Setter — laboratorio", icon: CalendarClock, adminOnly: true },
+  { to: "/content-creator", label: "Content Creator — laboratorio", icon: PenSquare, adminOnly: true },
+  { to: "/sales", label: "Sales — laboratorio", icon: Handshake, adminOnly: true },
+  { to: "/analyst", label: "Analyst — laboratorio", icon: LineChart, adminOnly: true },
+  { to: "/strumenti", label: "Registro strumenti", icon: Wrench, adminOnly: true },
   { to: "/profilo", label: "Profilo aziendale", icon: Building2, adminOnly: true },
   { to: "/utenti", label: "Utenti e ruoli", icon: Users, adminOnly: true },
   { to: "/budget", label: "Budget e costi", icon: Wallet, adminOnly: true },

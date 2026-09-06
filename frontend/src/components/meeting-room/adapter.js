@@ -62,17 +62,36 @@ const DELIVERABLE_TYPE_LABEL = {
   social_content: "Post social", ad_campaign_draft: "Bozza campagna", lead_gen_plan: "Piano lead generation",
   kpi_report: "Report KPI", email: "Email", video_reel_project: "Progetto reel",
   flyer_project: "Progetto flyer", lead_gen_campaign: "Campagna lead generation",
+  appointment_setter_task: "Appointment Setter",
+  content_item: "Contenuto",
+  sales_opportunity: "Opportunità commerciale",
+  analyst_report: "Report KPI",
 };
 
 // deliverable_type -> kind per MultimodalProjectPanel (video/immagine reali,
 // mai una card che rimanda a una pagina laboratorio separata).
 export const MULTIMODAL_PANEL_KIND = { video_reel_project: "reel", flyer_project: "flyer" };
 
-// 'leadgen' non usa MultimodalProjectPanel (tabelle/duplicati/approvazione,
-// non generazione multimediale in linea): il pannello collaboratore rimanda
-// invece a una pagina laboratorio dedicata (/lead-generation), stesso
+// deliverable_type -> laboratorio dedicato (tabelle/duplicati/approvazione o
+// proposte/prenotazioni, non generazione multimediale in linea): il
+// pannello collaboratore rimanda a una pagina laboratorio separata, stesso
 // principio di "un solo piano, un solo percorso reale" di reel/flyer.
-export const LEADGEN_DELIVERABLE_TYPE = "lead_gen_campaign";
+// 'idField' e' opzionale: 'appointment_setter_task' non ha un id specifico
+// da propagare (nessuna proposta creata automaticamente alla creazione del
+// piano — richiede la scelta di un lead, azione dell'utente nel
+// laboratorio), quindi il link naviga alla pagina senza query string.
+export const LAB_LINK_BY_DELIVERABLE_TYPE = {
+  lead_gen_campaign: { kind: "leadgen", path: "/lead-generation", idParam: "campaignId", idField: "lead_campaign_id", label: "Lead Generation" },
+  appointment_setter_task: { kind: "appointments", path: "/appointment-setter", idParam: null, idField: null, label: "Appointment Setter" },
+  // Come 'appointment_setter_task': il task puo' collegare PIU' content_item
+  // (content_item_ids, una lista) invece di un singolo id, quindi nessun
+  // deep-link a un elemento specifico — si va alla lista del laboratorio.
+  content_item: { kind: "content_creator", path: "/content-creator", idParam: null, idField: null, label: "Content Creator" },
+  sales_opportunity: { kind: "sales", path: "/sales", idParam: null, idField: null, label: "Sales" },
+  // A differenza degli altri, qui l'id ESISTE davvero (il report e' creato
+  // subito da brain/service.py): deep-link diretto al report generato.
+  analyst_report: { kind: "analyst", path: "/analyst", idParam: "reportId", idField: "analyst_report_id", label: "Analyst" },
+};
 
 function activityFromTask(task, deliverable) {
   const label = DELIVERABLE_TYPE_LABEL[task?.deliverable_type] || task?.name || "Attività";
@@ -242,14 +261,19 @@ export function useMeetingRoomDataFromPlan(planId, refetchToken = 0) {
             taskId: task?.id || null,
             taskStatus: task?.task_status || null,
             activity: activityFromTask(task, deliverable),
-            document: deliverable ? {
-              id: deliverable.id, title: DELIVERABLE_TYPE_LABEL[deliverable.deliverable_type] || deliverable.deliverable_type,
-              type: deliverable.deliverable_type, status: deliverable.status, version: deliverable.version,
-              projectKind: MULTIMODAL_PANEL_KIND[deliverable.deliverable_type]
-                || (deliverable.deliverable_type === LEADGEN_DELIVERABLE_TYPE ? "leadgen" : null),
-              projectId: deliverable.content?.reel_project_id || deliverable.content?.flyer_project_id
-                || deliverable.content?.lead_campaign_id || null,
-            } : null,
+            document: deliverable ? (() => {
+              const lab = LAB_LINK_BY_DELIVERABLE_TYPE[deliverable.deliverable_type];
+              return {
+                id: deliverable.id, title: DELIVERABLE_TYPE_LABEL[deliverable.deliverable_type] || deliverable.deliverable_type,
+                type: deliverable.deliverable_type, status: deliverable.status, version: deliverable.version,
+                projectKind: MULTIMODAL_PANEL_KIND[deliverable.deliverable_type] || (lab ? lab.kind : null),
+                projectId: deliverable.content?.reel_project_id || deliverable.content?.flyer_project_id || null,
+                labPath: lab?.path || null,
+                labId: lab?.idField ? deliverable.content?.[lab.idField] : null,
+                labIdParam: lab?.idParam || null,
+                labLabel: lab?.label || null,
+              };
+            })() : null,
             history: task ? [
               { label: "Task creato", time: task.created_at ? new Date(task.created_at).toLocaleTimeString().slice(0, 5) : "—", state: "done" },
               ...(task.started_at ? [{ label: "Avviato", time: new Date(task.started_at).toLocaleTimeString().slice(0, 5), state: "done" }] : []),

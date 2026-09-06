@@ -161,6 +161,89 @@ SKILLS: dict[str, Skill] = {
         base_mode=STATUS_REAL, primary_provider="requesty",
     ),
 
+    # ==================== Skill REALE (Content Creator) ====================
+    "content_creation_requesty": Skill(
+        "content_creation_requesty", "Produzione contenuti multi-formato (Requesty)", "1.0.0",
+        "Decide quale tipo di contenuto produrre (post, caption, email, landing, blog/SEO, script "
+        "video/audio, brief immagine, comunicazioni commerciali...) in base a canale e fase di funnel "
+        "(domains/content_creator/decision.py), genera il testo REALE via Requesty grounded sul Fact "
+        "Ledger, valida struttura e claim, e collega l'asset multimediale reale (reel/flyer) quando il "
+        "tipo lo richiede — mai un contenuto inventato, mai un asset dichiarato pronto senza conferma.",
+        capability="content", deliverable_type="content_item",
+        allowed_roles=("content-creator",),
+        required_inputs=("objective", "channel"), required_facts=("ragione_sociale", "settore"),
+        tools=("requesty",), requires_approval=True,
+        cost_hint="pochi centesimi per generazione (token Requesty)",
+        validation="domains/content_creator/validation.py::validate_content + "
+                   "domains/reel_semantic.py::semantic_validate_generic_content",
+        handoff_to=("reel_video_runway", "flyer_image_generation"),
+        fallback="Connessione Requesty non verificata o modalità AI REALE non attiva: il contenuto resta "
+                "in BOZZA, mai una generazione simulata spacciata per reale.",
+        base_mode=STATUS_REAL, primary_provider="requesty",
+    ),
+
+    # ==================== Skill REALE (Analista performance) ====================
+    "kpi_analysis_real": Skill(
+        "kpi_analysis_real", "Analisi KPI reale", "1.0.0",
+        "Calcola KPI reali (conversion_rate, lead_velocity, response_rate, appointment_rate, close_rate, "
+        "funnel_drop_off, cost_per_lead/appointment/acquisition) da dati già presenti in ACTELYA (Lead "
+        "Generation, Sales, Appointment Setter, Tool Execution Gateway), li interpreta con regole "
+        "deterministiche e genera insight indirizzati agli agenti giusti — mai un dato inventato: un KPI "
+        "senza dati sufficienti è sempre NON_DISPONIBILE.",
+        capability="analytics", deliverable_type="analyst_report",
+        allowed_roles=("analista-performance",),
+        required_inputs=(), required_facts=(),
+        tools=(), requires_approval=False, cost_hint="nessuno (solo letture, nessuna chiamata a pagamento)",
+        validation="domains/analyst/metrics.py (ogni KPI con source/formula/reliability/missing_data espliciti)",
+        handoff_to=("sales_pipeline_management", "content_creation_requesty", "lead_gen_plan_m2"),
+        fallback="Meno di 5 osservazioni per un KPI: reliability BASSA o NON_DISPONIBILE, mai un valore stimato.",
+        base_mode=STATUS_REAL,
+    ),
+
+    # ==================== Skill REALE (Sales Agent) ====================
+    "sales_pipeline_management": Skill(
+        "sales_pipeline_management", "Gestione pipeline commerciale", "1.0.0",
+        "Analizza un lead pronto per l'handoff (Lead Generation), decide canale/timing/next-best-action, "
+        "delega a Content Creator la scrittura del messaggio (mai una seconda chiamata Requesty qui), gestisce "
+        "le risposte del prospect attraverso l'intera pipeline (new -> ... -> won/lost) e si collega in "
+        "lettura all'esito reale di una prenotazione (Appointment Setter).",
+        capability="sales", deliverable_type="sales_opportunity",
+        allowed_roles=("sales-agent",),
+        required_inputs=("lead_id", "lead_type"), required_facts=(),
+        tools=(), requires_approval=False, cost_hint="nessuno (logica deterministica, nessuna chiamata a pagamento)",
+        validation="domains/sales/strategy.py::decide_next_action (nessuna transizione di stage senza una regola esplicita)",
+        handoff_to=("content_creation_requesty", "appointment_scheduling"),
+        fallback="Nessun canale di contatto disponibile sul lead: l'opportunità resta con next_best_action "
+                "ESCALATION_UMANA, mai un contatto tentato senza un canale reale.",
+        # primary_provider intenzionalmente assente, stesso caso di
+        # appointment_scheduling: nessun provider esterno da cui dipendere
+        # (logica interamente deterministica) — skill_status() la mostra
+        # comunque NOT_CONFIGURED in questo endpoint puramente informativo,
+        # mai usato per bloccare il flusso reale (che non dipende da alcuna
+        # connessione esterna).
+        base_mode=STATUS_REAL,
+    ),
+
+    # ==================== Skill REALE (Appointment Setter) ====================
+    "appointment_scheduling": Skill(
+        "appointment_scheduling", "Proposta e prenotazione appuntamenti", "1.0.0",
+        "Calcolo slot liberi da disponibilità+calendario reale (Google Calendar/Microsoft Graph/"
+        "Calendly), proposta, approvazione, prenotazione reale, cancellazione/riprogrammazione.",
+        capability="appointments", deliverable_type="appointment_setter_task",
+        allowed_roles=("appointment-setter",),
+        required_inputs=("lead_id", "connection_id"), required_facts=(),
+        tools=("google_calendar", "microsoft_graph", "calendly"),
+        requires_approval=True, cost_hint="nessuno (le API calendario dei provider supportati non sono a pagamento)",
+        validation="domains/appointments/scheduling.py::compute_free_slots (nessuno slot oltre la disponibilità reale)",
+        fallback="Connessione calendario non configurata/non verificata: proposta creata comunque, "
+                "senza slot (mai uno slot inventato); prenotazione non disponibile finché non collegata.",
+        # primary_provider intenzionalmente assente: a differenza di Requesty/Runway
+        # (un solo provider possibile), qui l'org sceglie tra 3 provider diversi —
+        # skill_status() la mostra sempre NOT_CONFIGURED in questo endpoint puramente
+        # informativo (mai usato per bloccare il flusso reale, che legge sempre lo
+        # stato vero della connessione da appointment_connections).
+    ),
+
     # ==================== Skill PREDISPOSTA (nessun provider oggi, endpoint Requesty confermato ma non ancora collegato) ====================
     "voice_over_tts": Skill(
         "voice_over_tts", "Voice-over / TTS", "0.5.0-predisposta",

@@ -24,6 +24,7 @@ from .models import (
     ALLOWED_MIME_BY_EXT,
     MAX_FILE_SIZE_BYTES,
     CampaignBody,
+    EnrichmentResultBody,
     ExportBody,
     MappingBody,
     MergeDecisionBody,
@@ -451,3 +452,35 @@ async def handoff_campaign(campaign_id: str, user: dict = Depends(require_roles(
                     entity_type="lead_campaign", entity_id=campaign_id,
                     details={"qualified_count": aziende_qualificate})
     return {k: v for k, v in pacchetto.items() if k != "_id"}
+
+
+# ==================== Arricchimento per-lead (capability astratte, nessun provider oggi) ====================
+@router.post("/leads/{lead_type}/{lead_id}/request-enrichment")
+async def request_enrichment_endpoint(lead_type: str, lead_id: str,
+                                      user: dict = Depends(require_roles("ADMIN", "OPERATORE"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    try:
+        richiesta = await pipeline.request_enrichment(db, org_id=org_id, lead_type=lead_type, lead_id=lead_id, actor=user["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    await log_audit(org_id=org_id, user=user, action="LEADGEN_ENRICHMENT_REQUESTED",
+                    entity_type="lead_enrichment_request", entity_id=richiesta["id"],
+                    details={"lead_id": lead_id, "capability_richieste": richiesta["capability_richieste"]})
+    return richiesta
+
+
+@router.post("/enrichment-requests/{request_id}/apply-result")
+async def apply_enrichment_result_endpoint(request_id: str, body: EnrichmentResultBody,
+                                           user: dict = Depends(require_roles("ADMIN", "OPERATORE"))):
+    org_id = user.get("organization_id") or DEFAULT_ORG_ID
+    richiesta = await db.lead_enrichment_requests.find_one({"id": request_id})
+    assert_same_org(richiesta, user, "Richiesta di arricchimento non trovata")
+    try:
+        esito = await pipeline.apply_enrichment_result_for_lead(
+            db, richiesta, result_fields=body.result_fields, source=body.source, actor=user["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    await log_audit(org_id=org_id, user=user, action="LEADGEN_ENRICHMENT_APPLIED",
+                    entity_type="lead_enrichment_request", entity_id=request_id,
+                    details={"source": body.source, "conflitti": len(esito["conflitti"])})
+    return esito

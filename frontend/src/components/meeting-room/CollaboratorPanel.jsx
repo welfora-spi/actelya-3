@@ -162,12 +162,14 @@ export default function CollaboratorPanel({ collaborator, summary, planId, onAct
 
       <div className="mb-5">
         <div className="label-caps mb-2">Documento in produzione</div>
-        {multimodalKind === "leadgen" && collaborator.document?.projectId ? (
-          <Link to={`/lead-generation?campaignId=${collaborator.document.projectId}`}
-            data-testid="panel-leadgen-link"
+        {collaborator.document?.labPath ? (
+          <Link to={collaborator.document.labIdParam && collaborator.document.labId
+              ? `${collaborator.document.labPath}?${collaborator.document.labIdParam}=${collaborator.document.labId}`
+              : collaborator.document.labPath}
+            data-testid="panel-lab-link"
             className="flex items-center gap-2.5 rounded-md border border-primary/40 px-3 py-2 text-sm text-primary hover:bg-primary/10 transition-colors duration-200">
             <ExternalLink className="w-4 h-4 shrink-0" strokeWidth={1.75} />
-            Vai al laboratorio Lead Generation
+            Vai al laboratorio {collaborator.document.labLabel}
           </Link>
         ) : multimodalKind && collaborator.document?.projectId ? (
           <MultimodalProjectPanel kind={multimodalKind} projectId={collaborator.document.projectId} compact />

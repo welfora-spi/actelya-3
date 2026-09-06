@@ -15,7 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from app.domains.leadgen.pagination import MAX_PAGE_SIZE, paginate, resolve_sort
 from app.models import new_id, now_iso
-from conftest import API_URL as API
+from conftest import API_URL as API, register_tenant
 
 TEST_PASSWORD = "LeadGenPageTest!2026x"
 
@@ -181,16 +181,7 @@ def test_resolve_sort_direzione_non_ammessa_solleva_errore():
 
 # ==================== HTTP live (server + MongoDB reali) ====================
 def _register(company_name="Lead Gen Page Test Co"):
-    email = f"test_{uuid.uuid4().hex[:12]}@example.com"
-    body = {
-        "company_name": company_name, "sector": "Servizi", "website": "https://example.com",
-        "social_links": [], "primary_goal": "Crescere",
-        "first_name": "Test", "last_name": "User", "email": email, "password": TEST_PASSWORD,
-    }
-    r = requests.post(f"{API}/tenant/register", json=body, timeout=15)
-    assert r.status_code == 200, r.text
-    data = r.json()
-    return data["organization_id"], data["access_token"]
+    return register_tenant(company_name, password=TEST_PASSWORD)
 
 
 def _auth(token):

@@ -112,3 +112,11 @@ class ExportBody(BaseModel):
 class ReviewApprovalBody(BaseModel):
     approve: bool
     note: str = ""
+
+
+class EnrichmentResultBody(BaseModel):
+    # Campi grezzi restituiti da un futuro adapter reale (o da un adapter di
+    # test, oggi): {"email": "...", "telefono": "...", ...} — mai un nome di
+    # provider qui, solo dati (vedi domains/leadgen/enrichment.py).
+    result_fields: dict[str, str] = Field(default_factory=dict)
+    source: str = "manuale"

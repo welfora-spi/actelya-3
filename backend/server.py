@@ -13,6 +13,13 @@ from app.domains import (auth, org, users_mgmt, connections, engine, approvals, 
                          social_publishing, meta_connections)
 from app.domains.leadgen import router as leadgen_router
 from app.domains.leadgen import pipeline as leadgen_pipeline
+from app.domains.appointments import router as appointments_router
+from app.domains.appointments import pipeline as appointments_pipeline
+from app.domains.content_creator import router as content_creator_router
+from app.domains.content_creator import pipeline as content_creator_pipeline
+from app.domains.sales import router as sales_router
+from app.domains.analyst import router as analyst_router
+from app.tools import router as tool_registry_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -40,6 +47,11 @@ for module in (auth, org, users_mgmt, connections, engine, approvals, settings, 
     api_router.include_router(module.router)
 api_router.include_router(meta_connections.status_router)
 api_router.include_router(leadgen_router.router)
+api_router.include_router(appointments_router.router)
+api_router.include_router(content_creator_router.router)
+api_router.include_router(sales_router.router)
+api_router.include_router(analyst_router.router)
+api_router.include_router(tool_registry_router.router)
 
 from app.m2 import engine as m2_engine
 api_router.include_router(m2_engine.router)
@@ -141,6 +153,49 @@ async def startup():
     await db.lead_dedup_reviews.create_index([("organization_id", 1), ("campaign_id", 1), ("status", 1), ("created_at", 1)])
     await db.lead_exports.create_index("id", unique=True)
     await db.lead_handoff_packages.create_index("id", unique=True)
+    await db.lead_enrichment_requests.create_index("id", unique=True)
+    await db.lead_enrichment_requests.create_index([("organization_id", 1), ("lead_id", 1), ("status", 1)])
+
+    # Appointment Setter — indici idempotenti, nessun indice unico globale
+    # fra organizzazioni diverse.
+    await db.appointment_connections.create_index("id", unique=True)
+    await db.appointment_connections.create_index([("organization_id", 1), ("provider_type", 1)])
+    await db.appointment_proposals.create_index("id", unique=True)
+    await db.appointment_proposals.create_index([("organization_id", 1), ("status", 1), ("created_at", -1)])
+    await db.appointment_bookings.create_index("id", unique=True)
+    await db.appointment_bookings.create_index("idempotency_key", unique=True)
+    await db.appointment_bookings.create_index([("organization_id", 1), ("status", 1), ("start", 1)])
+    await db.appointment_bookings.create_index([("organization_id", 1), ("connection_id", 1), ("status", 1)])
+    await db.appointment_reschedule_sagas.create_index("id", unique=True)
+    await db.appointment_reschedule_sagas.create_index([("organization_id", 1), ("status", 1)])
+    await db.appointment_reschedule_sagas.create_index("booking_id")
+
+    # Tool Execution Gateway — cost ledger e budget per organizzazione.
+    await db.organization_budgets.create_index("organization_id", unique=True)
+    await db.tool_cost_events.create_index([("organization_id", 1), ("day", 1), ("tool_id", 1)])
+
+    # Content Creator — indici idempotenti.
+    await db.content_items.create_index("id", unique=True)
+    await db.content_items.create_index([("organization_id", 1), ("status", 1), ("created_at", -1)])
+    await db.content_items.create_index([("organization_id", 1), ("campaign_id", 1)])
+    await db.content_item_versions.create_index([("content_item_id", 1), ("version", -1)])
+
+    # Sales Agent — indici idempotenti.
+    await db.sales_opportunities.create_index("id", unique=True)
+    await db.sales_opportunities.create_index([("organization_id", 1), ("lead_type", 1), ("lead_id", 1)], unique=True)
+    await db.sales_opportunities.create_index([("organization_id", 1), ("stage", 1), ("created_at", -1)])
+
+    # Analyst/KPI — indici idempotenti.
+    await db.analyst_reports.create_index("id", unique=True)
+    await db.analyst_reports.create_index([("organization_id", 1), ("generated_at", -1)])
+
+    # Professional Tool Registry — validazione contratti allo startup (blocco sicuro se invalido)
+    from app.tools.registry import validate_registry as validate_tool_registry, RegistryError, TOOLS as TOOL_REGISTRY, REGISTRY_VERSION as TOOL_REGISTRY_VERSION
+    try:
+        validate_tool_registry()
+        logger.info("Professional Tool Registry valido (%s): %s strumenti censiti", TOOL_REGISTRY_VERSION, len(TOOL_REGISTRY))
+    except RegistryError as e:
+        logger.error("Professional Tool Registry INVALIDO: %s", e)
 
     # Milestone 2 (SIMULAZIONE) — indici additivi, non distruttivi
     from app.m2.models import create_m2_indexes
@@ -193,6 +248,11 @@ async def startup():
 
     await leadgen_pipeline.recover_on_startup(db)
     leadgen_pipeline.start_worker(db)
+
+    await appointments_pipeline.recover_on_startup(db)
+    appointments_pipeline.start_worker(db)
+
+    await content_creator_pipeline.recover_on_startup(db)
 
     # Milestone 2 — recovery idempotente protetto da lock (leader election)
     await m2_engine.recover_m2(db)

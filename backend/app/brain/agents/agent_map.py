@@ -121,6 +121,35 @@ AGENT_MAPPINGS: tuple[AgentMapping, ...] = (
         quality_criteria=("oggetto/CTA non vuoti", "nessun destinatario reale, nessuna PII"),
     ),
     AgentMapping(
+        "content", "content_creator", "content-creator", "Content Creator",
+        "Produzione multi-formato di contenuti (landing, blog/SEO, comunicazioni commerciali/offerte, "
+        "caroselli, contenuti informativi e qualunque altro formato richiesto esplicitamente) — decide "
+        "cosa produrre, genera davvero il testo via Requesty, e collega l'asset multimediale reale "
+        "(reel/flyer) quando il formato lo richiede.", True,
+        execution_ready=True, execution_mode=EXECUTION_MODE_REAL, deliverable_type="content_item",
+        implementation_note="Non e' un agente M2 operativo in senso stretto (nessun producer deterministico "
+                             "in m2/deliverables.py): il piano M2 include un task 'content_item' collegato al "
+                             "laboratorio reale in domains/content_creator (decisione del formato, generazione "
+                             "reale via Requesty, validazione strutturale e semantica, approvazione, "
+                             "collegamento asset). Agente CONSOLIDATO: riusa le skill/producer gia' esistenti "
+                             "di copywriter/video-creator/creative-designer (mai rimossi, mai duplicati) per i "
+                             "formati gia' coperti da quelle capability; copre nativamente i formati non "
+                             "ancora presidiati da nessun agente (landing, blog/SEO, comunicazioni "
+                             "commerciali/offerte, caroselli, contenuti informativi). 'm2_agent_id' qui e' "
+                             "solo un'etichetta descrittiva, non una voce di m2/agents_registry.py::AGENT_CONTRACTS.",
+        notes="Il task entra nello STESSO piano/DAG M2 delle altre capability (brain/service.py): un solo "
+              "piano, mai un secondo percorso separato.",
+        mission="Decidere quale contenuto produrre e perche', generarlo davvero grounded sul Fact Ledger, "
+                "e portarlo fino al deliverable finale (incluso l'asset multimediale collegato, quando richiesto).",
+        skills=("content_creation_requesty",),
+        data_accessible=("ragione_sociale", "settore", "sito_web", "obiettivi_commerciali", "prodotto",
+                         "pubblico_target", "tono_di_voce"),
+        quality_criteria=("nessuna affermazione su prodotto/pubblico/prezzo/territorio estranea al Fact "
+                          "Ledger o al brief (domains/reel_semantic.py)", "contenuto dichiarato pronto SOLO "
+                          "dopo la validazione strutturale (domains/content_creator/validation.py)"),
+        excluded_when=("il Fact Ledger non ha ragione_sociale/settore",),
+    ),
+    AgentMapping(
         "ads", "advertising", "resp-advertising", "Specialista advertising",
         "Bozza di campagna pubblicitaria (mai pubblicata).", True,
         execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="ad_campaign_draft",
@@ -157,12 +186,27 @@ AGENT_MAPPINGS: tuple[AgentMapping, ...] = (
     ),
     AgentMapping(
         "analytics", "analytics_performance", "analista-performance", "Analista performance",
-        "Report KPI, lettura/valutazione di risultati e performance esistenti.", True,
-        execution_ready=True, execution_mode=EXECUTION_MODE_M2, deliverable_type="kpi_report",
-        mission="Riportare indicatori con target e valore dichiarato SIMULATO o NON_DISPONIBILE — mai un dato reale inventato.",
-        skills=("kpi_report_m2",),
-        data_accessible=("ragione_sociale", "settore"),
-        quality_criteria=("almeno 3 KPI", "'source' sempre SIMULATO o NON_DISPONIBILE, mai un valore reale non verificato"),
+        "Report KPI REALI su lead/pipeline commerciale/appuntamenti/costi già presenti in ACTELYA, "
+        "interpretazione (anomalie/pattern) e insight strutturati indirizzati agli agenti interessati.", True,
+        execution_ready=True, execution_mode=EXECUTION_MODE_REAL, deliverable_type="analyst_report",
+        implementation_note="Non e' un agente M2 operativo in senso stretto (il producer 'kpi_report_m2' resta "
+                             "invariato per il percorso M2 diretto/simulato, non piu' usato da questo percorso): "
+                             "il piano M2 include un task 'analyst_report' collegato al laboratorio reale in "
+                             "domains/analyst, che calcola KPI REALI da dati gia' presenti (lead_companies/"
+                             "lead_persons, sales_opportunities, appointment_bookings, tool_cost_events) — mai un "
+                             "valore inventato: un KPI senza dati sufficienti e' sempre NON_DISPONIBILE, mai "
+                             "sostituito da una stima. 'm2_agent_id' qui e' solo un'etichetta descrittiva, non una "
+                             "voce di m2/agents_registry.py::AGENT_CONTRACTS.",
+        notes="Il task entra nello STESSO piano/DAG M2 delle altre capability (brain/service.py): un solo piano, "
+              "mai un secondo percorso separato.",
+        mission="Calcolare KPI reali con fonte/formula/affidabilita' espliciti, interpretarli (mai solo "
+                "visualizzarli), e indirizzare insight strutturati agli agenti giusti (CEO, Sales, Lead "
+                "Generation, Content Creator) — mai un dato mancante sostituito da un'invenzione.",
+        skills=("kpi_analysis_real",),
+        data_accessible=("lead qualificati (lead_generation)", "pipeline commerciale (sales)",
+                         "prenotazioni (appointment-setter)", "costi strumenti (Tool Execution Gateway)"),
+        quality_criteria=("ogni KPI ha source/formula/valore/reliability/missing_data espliciti",
+                          "nessun insight generato su un campione dichiarato insufficiente"),
         excluded_when=("la richiesta e' di creare/lanciare qualcosa di nuovo, non di leggere risultati esistenti",),
     ),
     AgentMapping(
@@ -239,15 +283,59 @@ AGENT_MAPPINGS: tuple[AgentMapping, ...] = (
     ),
     AgentMapping(
         "appointments", "appointment_setter", "appointment-setter", "Appointment setter",
-        "Predisporre un processo per ottenere appuntamenti.", False,
-        execution_ready=False, execution_mode=EXECUTION_MODE_UNAVAILABLE, deliverable_type=None,
-        implementation_note="Nessun deliverable_type esiste in M2 per questa capability e nessun "
-                             "producer di simulazione esiste nel brain (verificato su "
-                             "m2/deliverables.py::PRODUCERS e brain/producers.py::BRAIN_PRODUCERS, "
-                             "entrambi privi di una voce 'appointments'). PREDISPOSTO in M2 "
-                             "(agents_registry.py, operative=False): non eseguibile, né realmente né "
-                             "in simulazione, in questa fase.",
-        mission="PREDISPOSTO: fissare appuntamenti (nessuna implementazione oggi).",
+        "Proporre e prenotare appuntamenti reali su calendario esterno (Google Calendar/Microsoft "
+        "Graph/Calendly), sempre a partire da lead già approvati.", True,
+        execution_ready=True, execution_mode=EXECUTION_MODE_REAL, deliverable_type="appointment_setter_task",
+        implementation_note="Non e' un agente M2 operativo in senso stretto (nessun producer "
+                             "deterministico in m2/deliverables.py): il piano M2 include un task "
+                             "'appointment_setter_task' collegato al laboratorio reale in "
+                             "domains/appointments (proposta slot, approvazione, prenotazione reale su "
+                             "Google Calendar/Microsoft Graph/Calendly). Funziona con ZERO provider "
+                             "esterni configurati (connessione calendario NON_CONFIGURATA finche' non "
+                             "collegata): nessuna prenotazione e' mai dichiarata confermata senza una "
+                             "risposta reale del provider (o del fake adapter nei test) — un errore o "
+                             "timeout produce ESITO_INCERTO, mai una conferma inventata. Un lead con "
+                             "consenso/opt-out/DO_NOT_CONTACT non entra mai in una proposta. "
+                             "'m2_agent_id' qui e' solo un'etichetta descrittiva, non una voce di "
+                             "m2/agents_registry.py::AGENT_CONTRACTS (che resta PREDISPOSTO/non "
+                             "operativo per il percorso M2 simulato diretto).",
+        notes="Il task entra nello STESSO piano/DAG M2 delle altre capability (brain/service.py): un "
+              "solo piano, mai un secondo percorso separato. Il lavoro vero (selezione lead, proposta "
+              "slot, approvazione, prenotazione, cancellazione/riprogrammazione) avviene nel "
+              "laboratorio Appointment Setter.",
+        mission="Selezionare slot compatibili con la disponibilità reale del calendario, ottenere "
+                "l'approvazione umana e prenotare davvero — mai un contatto o una prenotazione senza "
+                "conferma verificabile.",
+        skills=("appointment_scheduling",),
+        data_accessible=("lead approvato (lead_generation)", "disponibilità calendario collegato"),
+        quality_criteria=("nessuna prenotazione dichiarata CONFERMATA senza risposta del provider",
+                          "nessun lead DO_NOT_CONTACT/opt-out mai incluso in una proposta"),
+        excluded_when=("nessun lead approvato disponibile e nessuna connessione calendario configurata",),
+    ),
+    AgentMapping(
+        "sales", "sales_pipeline", "sales-agent", "Sales Agent",
+        "Pipeline commerciale completa a partire da lead qualificati (Lead Generation): analisi, strategia di "
+        "contatto, gestione delle risposte del prospect, obiezioni, handoff con Appointment Setter.", True,
+        execution_ready=True, execution_mode=EXECUTION_MODE_REAL, deliverable_type="sales_opportunity",
+        implementation_note="Non e' un agente M2 operativo in senso stretto (nessun producer deterministico in "
+                             "m2/deliverables.py): il piano M2 include un task 'sales_opportunity' collegato al "
+                             "laboratorio reale in domains/sales. Come 'appointments', non esiste un 'contenitore' "
+                             "da creare subito: un'opportunità richiede un lead specifico già QUALIFIED/pronto per "
+                             "l'handoff (next_action == PRONTO_PER_SALES, deciso da Lead Generation), azione "
+                             "dell'utente nel laboratorio, non derivabile dal solo testo dell'obiettivo. "
+                             "'m2_agent_id' qui e' solo un'etichetta descrittiva, non una voce di "
+                             "m2/agents_registry.py::AGENT_CONTRACTS.",
+        notes="Il task entra nello STESSO piano/DAG M2 delle altre capability (brain/service.py): un solo piano, "
+              "mai un secondo percorso separato. Delega SEMPRE la scrittura del messaggio a Content Creator "
+              "(capability 'content'): mai una seconda chiamata Requesty duplicata qui.",
+        mission="Decidere strategia, canale, timing e next-best-action per ogni lead qualificato, gestire "
+                "l'intera pipeline (fino a vinto/perso) reagendo alle risposte del prospect, e coordinarsi con "
+                "Appointment Setter per gli appuntamenti — mai un contatto senza un canale reale disponibile.",
+        skills=("sales_pipeline_management",),
+        data_accessible=("lead qualificato (lead_generation)", "esito prenotazione (appointment-setter)"),
+        quality_criteria=("nessuna transizione di stage senza una regola esplicita (strategy.py)",
+                          "nessuna opportunità creata da un lead non PRONTO_PER_SALES"),
+        excluded_when=("nessun lead pronto per l'handoff a Sales disponibile",),
     ),
     AgentMapping(
         "nurturing", "nurturing", "specialista-nurturing", "Specialista nurturing",

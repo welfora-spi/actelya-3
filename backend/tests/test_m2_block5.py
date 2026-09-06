@@ -308,14 +308,25 @@ def test_http_create_plan_bloccato_reale_ma_http_tick_piano_esistente_no():
         client, db = _db()
         org = f"org-test-{uuid.uuid4().hex[:8]}"
         user = {"id": "u1", "email": "u1@test.it", "organization_id": org, "role": "OPERATORE"}
+        # http_create_plan()/http_tick() (a differenza di create_plan/approve_plan,
+        # che accettano 'db' esplicito) usano internamente E._global_db, il client
+        # Mongo condiviso di PROCESSO — mai riusabile con sicurezza attraverso più
+        # asyncio.run() indipendenti nello stesso worker pytest-xdist (fonte nota
+        # di 'Event loop is closed' su Motor/Windows). Si isola quindi anche
+        # questo test sul client dedicato 'actelya3_test', stesso principio già
+        # applicato da test_reel_flow.py::_scenario (scambio temporaneo del
+        # riferimento al modulo, mai una seconda connessione al db reale di
+        # processo dentro questo singolo asyncio.run()).
+        db_originale = E._global_db
+        E._global_db = db
         try:
             # Piano creato e approvato in SIMULAZIONE, PRIMA di attivare il reale.
-            res = await E.create_plan(E._global_db, org, user["id"], new_id("goal"),
+            res = await E.create_plan(db, org, user["id"], new_id("goal"),
                                       "Prepara una campagna social e adv per il lancio")
             plan_id = res["plan"]["id"]
-            await E.approve_plan(E._global_db, plan_id, user["email"])
+            await E.approve_plan(db, plan_id, user["email"])
 
-            await E._global_db.settings.update_one({"id": org}, {"$set": {"id": org, "ai_real_mode": True}}, upsert=True)
+            await db.settings.update_one({"id": org}, {"$set": {"id": org, "ai_real_mode": True}}, upsert=True)
 
             # POST /m2/plans grezzo: bloccato.
             creato_bloccato = None
@@ -326,6 +337,7 @@ def test_http_create_plan_bloccato_reale_ma_http_tick_piano_esistente_no():
 
             # POST /m2/plans/{id}/tick su un piano GIA' esistente: NON bloccato.
             tick_status = None
+            tick_res = None
             try:
                 tick_res = await E.http_tick(plan_id, user=user)
                 tick_status = "ok"
@@ -334,8 +346,9 @@ def test_http_create_plan_bloccato_reale_ma_http_tick_piano_esistente_no():
 
             return creato_bloccato, tick_status, tick_res if tick_status == "ok" else None
         finally:
-            await E._global_db.settings.delete_one({"id": org})
-            await _cleanup(E._global_db, org)
+            E._global_db = db_originale
+            await db.settings.delete_one({"id": org})
+            await _cleanup(db, org)
             client.close()
 
     creato_bloccato, tick_status, tick_res = run(scenario())
