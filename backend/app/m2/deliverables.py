@@ -219,6 +219,76 @@ def validate_flyer_project(c):
     }
 
 
+def _validato_con_riferimento(c, chiave_id: str, laboratorio: str, nota_contenuto: str) -> dict:
+    """Stesso pattern di validate_video_reel_project/validate_flyer_project:
+    placeholder strutturale per un task REALE il cui contenuto vero vive in
+    un laboratorio dedicato, MAI generato o validato da M2 — richiede solo
+    che il riferimento (id) già creato dal laboratorio sia presente."""
+    if not isinstance(c, dict) or not c.get(chiave_id):
+        return {"status": "BLOCCATO", "warnings": [], "errors": [f"{chiave_id} mancante: nessun {laboratorio} collegato"]}
+    return {
+        "status": "COMPLETATO_CON_AVVISI",
+        "warnings": [f"{nota_contenuto} gestito nel laboratorio {laboratorio}, non generato da M2: "
+                    f"apri il laboratorio per proseguire e approvare."],
+        "errors": [],
+    }
+
+
+def _validato_senza_riferimento(c, laboratorio: str, nota_contenuto: str) -> dict:
+    """Stesso principio di _validato_con_riferimento, per un task REALE che
+    NON crea automaticamente un'entità (richiede una scelta specifica
+    dell'utente nel laboratorio, es. un lead o un'opportunità già scelti):
+    nessun id da verificare, solo che il task sia davvero in modalità REALE."""
+    if not isinstance(c, dict) or c.get("mode") != "REALE":
+        return {"status": "BLOCCATO", "warnings": [], "errors": ["Task non in modalità REALE: nessun contenuto da collegare"]}
+    return {
+        "status": "COMPLETATO_CON_AVVISI",
+        "warnings": [f"{nota_contenuto} gestito nel laboratorio {laboratorio}, non generato da M2: "
+                    f"apri il laboratorio per scegliere l'elemento specifico e proseguire."],
+        "errors": [],
+    }
+
+
+def validate_lead_gen_campaign(c):
+    return _validato_con_riferimento(c, "lead_campaign_id", "Lead Generation",
+                                     "Import, qualifica e approvazione dei prospect reali")
+
+
+def validate_content_item(c):
+    if not isinstance(c, dict) or not c.get("content_item_ids"):
+        return {"status": "BLOCCATO", "warnings": [], "errors": ["content_item_ids mancante: nessun contenuto collegato"]}
+    return {
+        "status": "COMPLETATO_CON_AVVISI",
+        "warnings": ["Generazione e approvazione del contenuto reale gestite nel laboratorio Content Creator, "
+                    "non generate da M2: apri il laboratorio per proseguire."],
+        "errors": [],
+    }
+
+
+def validate_appointment_setter_task(c):
+    return _validato_senza_riferimento(c, "Appointment Setter",
+                                       "Proposta slot, approvazione e prenotazione reale")
+
+
+def validate_sales_opportunity(c):
+    return _validato_senza_riferimento(c, "Sales", "Strategia, messaggio e gestione della pipeline commerciale")
+
+
+def validate_analyst_report(c):
+    """A differenza degli altri task REALI, qui il contenuto è già
+    interamente calcolato al momento della creazione del piano (KPI reali +
+    insight, vedi domains/analyst/pipeline.py::compute_report): nessun
+    ulteriore passaggio di generazione manca nel laboratorio."""
+    if not isinstance(c, dict) or not c.get("analyst_report_id"):
+        return {"status": "BLOCCATO", "warnings": [], "errors": ["analyst_report_id mancante: nessun report collegato"]}
+    return {
+        "status": "COMPLETATO_CON_AVVISI",
+        "warnings": ["Report KPI reale già calcolato (Lead Generation/Sales/Appointment Setter/Tool Execution "
+                    "Gateway): apri il laboratorio Analyst per consultare KPI e insight."],
+        "errors": [],
+    }
+
+
 VALIDATORS = {
     "marketing_strategy": validate_marketing_strategy,
     "editorial_plan": validate_editorial_plan,
@@ -229,6 +299,11 @@ VALIDATORS = {
     "email": validate_email_deliverable,   # compatibilità Milestone 1
     "video_reel_project": validate_video_reel_project,
     "flyer_project": validate_flyer_project,
+    "lead_gen_campaign": validate_lead_gen_campaign,
+    "content_item": validate_content_item,
+    "appointment_setter_task": validate_appointment_setter_task,
+    "sales_opportunity": validate_sales_opportunity,
+    "analyst_report": validate_analyst_report,
 }
 
 

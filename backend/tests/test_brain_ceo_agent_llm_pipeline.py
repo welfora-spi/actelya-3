@@ -146,6 +146,18 @@ def test_capability_reale_ma_non_rilevata_da_keyword_entra_nel_piano(monkeypatch
     async def scenario():
         client, db = _db()
         org = f"org-test-{uuid.uuid4().hex[:8]}"
+        # brain/service.py, blocco 'leadgen', chiama leadgen_router.create_campaign()
+        # senza propagargli il 'db' esplicito (a differenza di content/analytics/sales,
+        # che accettano 'db' come parametro): quella funzione, essendo pensata per il
+        # percorso HTTP live, usa il proprio 'db' importato a livello di modulo (il
+        # client Mongo condiviso di PROCESSO — mai riusabile con sicurezza attraverso
+        # più asyncio.run() indipendenti nello stesso worker pytest-xdist, fonte nota
+        # di 'Event loop is closed' su Motor/Windows). Si isola quindi anche questo
+        # riferimento sul client dedicato 'actelya3_test', stesso principio già
+        # applicato da test_reel_flow.py::_scenario e test_m2_block5.py.
+        import app.domains.leadgen.router as leadgen_router_mod
+        leadgen_db_originale = leadgen_router_mod.db
+        leadgen_router_mod.db = db
         try:
             await M.create_m2_indexes(db)
             await db.settings.update_one({"id": org}, {"$set": {"id": org, "ai_real_mode": True}}, upsert=True)
@@ -175,6 +187,7 @@ def test_capability_reale_ma_non_rilevata_da_keyword_entra_nel_piano(monkeypatch
             assert res["lead_campaign"] is not None
             return True
         finally:
+            leadgen_router_mod.db = leadgen_db_originale
             await _cleanup(db, org)
             client.close()
 
