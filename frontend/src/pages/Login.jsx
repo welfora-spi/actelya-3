@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useSystem } from "@/context/SystemContext";
 
@@ -7,6 +7,8 @@ export default function Login() {
   const { login, formatApiError } = useAuth();
   const { refresh } = useSystem();
   const navigate = useNavigate();
+  const location = useLocation();
+  const from = location.state?.from;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -18,7 +20,8 @@ export default function Login() {
     try {
       const u = await login(email.trim(), password);
       await refresh();
-      navigate(u.must_change_password ? "/cambia-password" : "/");
+      const dest = from ? `${from.pathname}${from.search || ""}` : "/";
+      navigate(u.must_change_password ? "/cambia-password" : dest);
     } catch (err) {
       setError(formatApiError(err.response?.data?.detail) || err.message);
     } finally { setLoading(false); }

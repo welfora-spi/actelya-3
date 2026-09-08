@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
-import api, { formatApiError } from "@/lib/api";
+import api, { formatApiError, setSessionExpiredHandler } from "@/lib/api";
 
 const AuthContext = createContext(null);
 
@@ -16,6 +16,16 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => { loadMe(); }, [loadMe]);
+
+  // Il refresh automatico (lib/api.js) tenta di rinnovare la sessione da
+  // solo; se anche il refresh fallisce (refresh_token scaduto/assente),
+  // qui si passa a "ospite": le route protette reindirizzano al login
+  // ricordando la pagina corrente, invece di restare bloccate a interrogare
+  // endpoint autenticati in silenzio.
+  useEffect(() => {
+    setSessionExpiredHandler?.(() => setUser(null));
+    return () => setSessionExpiredHandler?.(null);
+  }, []);
 
   const login = async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });

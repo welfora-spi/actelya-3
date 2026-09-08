@@ -53,8 +53,7 @@ export default function RoomBackdrop({ activeAgentIds, seats, selectedId, onSele
           >
             <ImageOff className="w-6 h-6" strokeWidth={1.5} />
             <p className="text-xs text-center max-w-xs">
-              Fotografia di base non ancora disponibile.<br />
-              Attesa: frontend/src/assets/meeting-room/layers/meeting-room-base-empty.webp
+              Sfondo della sala non disponibile in questo momento.
             </p>
           </div>
         )}

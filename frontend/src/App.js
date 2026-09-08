@@ -37,7 +37,10 @@ function Protected({ children, bare = false, roles = null }) {
   const location = useLocation();
   if (user === undefined)
     return <div className="dark min-h-screen bg-background text-foreground grid place-items-center text-sm text-muted-foreground">Caricamento…</div>;
-  if (user === null) return <Navigate to="/login" replace />;
+  // state.from: cosi' il login sa dove riportare l'utente (es. lo stesso
+  // piano/Sala Riunioni interrotto da una sessione scaduta), invece di
+  // atterrare sempre in dashboard.
+  if (user === null) return <Navigate to="/login" replace state={{ from: location }} />;
   if (user.must_change_password && location.pathname !== "/cambia-password")
     return <Navigate to="/cambia-password" replace />;
   // roles: stessa lista usata per nascondere la voce in Layout.jsx (NAV

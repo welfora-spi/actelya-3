@@ -20,7 +20,7 @@ export default function Plans() {
   return (
     <div data-testid="plans-page">
       <PageHeader title="Piani (M2)"
-        subtitle="Elenco dei piani prodotti dal brain: DAG di attività, preventivo e stato, tutto in SIMULAZIONE."
+        subtitle="Elenco dei piani prodotti dal brain: DAG di attività, preventivo e stato. Modalità reale/simulazione indicata nel dettaglio di ciascun piano."
         actions={
           <button data-testid="plans-new-goal-cta" onClick={() => navigate("/nuovo-obiettivo")}
             className="flex items-center gap-1.5 bg-primary text-primary-foreground rounded-sm px-4 py-2 text-sm font-medium hover:opacity-90 active:scale-[0.98] transition-colors duration-200">

@@ -152,6 +152,17 @@ export default function MultimodalProjectPanel({ kind, projectId, compact = fals
   const mediaReady = mediaStatus === cfg.mediaReadyStatus && Boolean(project[cfg.mediaUrlField]);
   const canGenerateMedia = project.progetto_pronto && semantic?.status === "OK" && ["NON_RICHIESTO", "BLOCCATO", "FALLITO"].includes(mediaStatus);
   const mediaActive = ["IN_CODA", "IN_GENERAZIONE"].includes(mediaStatus);
+  // Dato contraddittorio dal backend (stato "pronto" ma nessun asset
+  // persistito): mai mostrare la doppia dichiarazione "pronto" + "nessun
+  // media ancora generato" senza spiegarla — un'unica etichetta onesta,
+  // distinta sia da "pronto" sia dagli stati intermedi/di errore noti.
+  const mediaInconsistent = mediaStatus === cfg.mediaReadyStatus && !mediaReady;
+  const mediaPlayerStatus = mediaInconsistent ? "ASSET_NON_DISPONIBILE" : mediaStatus;
+  const mediaPlayerMessage = mediaInconsistent
+    ? "Il progetto risulta pronto ma nessun asset è stato ancora salvato: verificare la generazione."
+    : mediaActive ? "Generazione in corso."
+    : mediaStatus === "FALLITO" ? "Generazione fallita (vedi errore sopra); il costo eventuale resta registrato nel budget."
+    : "Nessun media ancora generato.";
 
   return (
     <div className={compact ? "space-y-3" : "space-y-4"}>
@@ -244,8 +255,8 @@ export default function MultimodalProjectPanel({ kind, projectId, compact = fals
             [{project.image_errore_codice}] {project.image_errore_messaggio}
           </div>
         )}
-        <MediaPlayer kind={cfg.mediaKind} src={mediaReady ? absoluteAssetUrl(project[cfg.mediaUrlField]) : null} status={mediaStatus} downloadable
-          message={mediaActive ? "Generazione in corso." : mediaStatus === "FALLITO" ? "Generazione fallita (vedi errore sopra); il costo eventuale resta registrato nel budget." : "Nessun media ancora generato."} />
+        <MediaPlayer kind={cfg.mediaKind} src={mediaReady ? absoluteAssetUrl(project[cfg.mediaUrlField]) : null} status={mediaPlayerStatus} downloadable
+          message={mediaPlayerMessage} />
         {(project.generazione_immagine?.stima_costo_usd != null || project.generazione?.stima_costo_usd != null) && (
           <div className="text-[11px] text-muted-foreground font-mono">
             Costo testo: {project.generazione?.stima_costo_usd != null ? `$${project.generazione.stima_costo_usd}` : "non disponibile"}

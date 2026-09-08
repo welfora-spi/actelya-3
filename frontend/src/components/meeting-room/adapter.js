@@ -40,6 +40,9 @@ export const SEAT_STATUS_META = {
   IN_REVISIONE: { label: "In revisione", tone: "amber" },
   COMPLETATO: { label: "Completato", tone: "emerald" },
   BLOCCATO: { label: "Bloccato", tone: "red" },
+  // Nessuna evidenza sufficiente nei dati ricevuti per determinare lo stato
+  // (mai un default operativo inventato — vedi coordinatorStatusFromPlan).
+  STATO_NON_DISPONIBILE: { label: "Stato non disponibile", tone: "slate" },
 };
 
 // task_status M2 (m2/engine.py) -> stato "umano" del collaboratore. Un
@@ -158,8 +161,53 @@ function buildCollaboratorSeats(activeAgentIds) {
   return seats;
 }
 
-function buildCoordinatorSeat() {
-  return { ...COORDINATOR_AGENT, ...COORDINATOR_DATA, id: COORDINATOR_AGENT.agent_id, kind: "coordinator" };
+function buildCoordinatorSeat(overrides = null) {
+  return { ...COORDINATOR_AGENT, ...COORDINATOR_DATA, ...(overrides || {}), id: COORDINATOR_AGENT.agent_id, kind: "coordinator" };
+}
+
+// Stato del Coordinatore derivato SOLO da evidenza reale del piano/task
+// ricevuti dal backend — mai lo stato demo statico (COORDINATOR_DATA,
+// status: "AL_LAVORO") quando esistono dati API reali. Vedi principio
+// generale del modulo: nessun agente/coordinatore mostrato al lavoro senza
+// un'attività realmente in esecuzione.
+function coordinatorStatusFromPlan(plan, tasks) {
+  if (!plan || !plan.plan_status) return "STATO_NON_DISPONIBILE";
+  if ((tasks || []).some((t) => t.task_status === "IN_ESECUZIONE")) return "AL_LAVORO";
+  if (plan.plan_status === "COMPLETATO") return "COMPLETATO";
+  if (["BLOCCATO", "ANNULLATO"].includes(plan.plan_status)) return "BLOCCATO";
+  // BOZZA / IN_ATTESA_APPROVAZIONE / APPROVATO_PARZIALE / APPROVATO /
+  // IN_ESECUZIONE (nessun task realmente IN_ESECUZIONE ancora osservato):
+  // il piano esiste ma non c'e' lavoro in corso da mostrare come "al lavoro".
+  return "IN_ATTESA";
+}
+
+function coordinatorActivityFromPlan(status) {
+  switch (status) {
+    case "AL_LAVORO":
+      return { title: "Coordinamento del team in corso", detail: "Sta seguendo l'avanzamento delle attività attualmente in esecuzione." };
+    case "COMPLETATO":
+      return { title: "Piano completato", detail: "Tutte le attività rilevanti risultano concluse." };
+    case "BLOCCATO":
+      return { title: "Piano bloccato o annullato", detail: "Una o più attività sono bloccate, oppure il piano è stato annullato." };
+    case "STATO_NON_DISPONIBILE":
+      return { title: "Stato non disponibile", detail: "Dati insufficienti per determinare lo stato del coordinatore." };
+    default:
+      return { title: "In attesa", detail: "Il piano non ha ancora attività realmente in esecuzione." };
+  }
+}
+
+// Cronologia SOLO da timestamp reali (plan.created_at) — mai orari fissi
+// inventati (a differenza di COORDINATOR_DATA.history, che resta solo dato
+// demo, mai usato quando c'e' un piano reale).
+function coordinatorHistoryFromPlan(plan, status) {
+  const entries = [];
+  if (plan?.created_at) {
+    const t = new Date(plan.created_at);
+    if (!Number.isNaN(t.getTime())) entries.push({ label: "Piano creato", time: t.toLocaleTimeString().slice(0, 5), state: "done" });
+  }
+  const { title } = coordinatorActivityFromPlan(status);
+  entries.push({ label: title, time: status === "AL_LAVORO" ? "In corso" : "—", state: status === "AL_LAVORO" ? "active" : "done" });
+  return entries;
 }
 
 export function deliverablesFromSeats(seats) {
@@ -197,22 +245,58 @@ function objectiveTitleFromPlan(plan) {
   return plan?.objective_type || "Obiettivo";
 }
 
-// M2 agent_id (motore, es. "marketing_strategist") -> frontend agent_id
-// (Sala Riunioni, es. "resp-marketing"): SOLO da GET /brain/agents (fonte
-// canonica backend, agents/agent_map.py), mai una tabella duplicata qui.
-async function fetchM2ToFrontendAgentMap() {
+// Un m2_agent_id puo' essere condiviso da PIU' ruoli frontend (es.
+// "content_social" -> sia "social-media-manager" [capability 'editorial']
+// sia "copywriter" [capability 'social']): una relazione m2_agent_id ->
+// singolo frontend_agent_id perde uno dei due ogni volta che coincidono
+// sullo stesso piano. Fonte canonica SOLO da GET /brain/agents
+// (agents/agent_map.py) — mai una tabella duplicata qui, mai un mapping
+// hard-coded specifico per un piano.
+async function fetchAgentMappings() {
   try {
     const { data } = await api.get("/brain/agents");
-    const map = {};
-    for (const agent of data.agents || []) {
-      for (const m of agent.mappings || []) {
-        if (m.m2_agent_id) map[m.m2_agent_id] = agent.agent_id;
-      }
-    }
-    return map;
+    return data.agents || [];
   } catch {
-    return {};
+    return [];
   }
+}
+
+// deliverable_type -> frontend_agent_id: ogni mapping del backend porta già
+// il proprio deliverable_type (agent_map.py::AgentMapping.deliverable_type),
+// quindi disambigua correttamente anche quando più ruoli condividono lo
+// stesso m2_agent_id — è il task stesso (il suo deliverable_type) a dire
+// quale ruolo frontend lo possiede, non l'ordine di un dizionario.
+function buildDeliverableTypeToFrontendAgent(agents) {
+  const map = {};
+  for (const agent of agents) {
+    for (const m of agent.mappings || []) {
+      if (m.deliverable_type) map[m.deliverable_type] = agent.agent_id;
+    }
+  }
+  return map;
+}
+
+// Fallback SOLO per un task senza deliverable_type risolvibile: se il
+// m2_agent_id corrisponde a un unico ruolo frontend possibile lo si usa,
+// altrimenti si lascia il task non assegnato piuttosto che indovinare (mai
+// una sovrascrittura silenziosa tra ruoli che condividono lo stesso agente).
+function buildM2AgentToFrontendAgents(agents) {
+  const map = {};
+  for (const agent of agents) {
+    for (const m of agent.mappings || []) {
+      if (!m.m2_agent_id) continue;
+      (map[m.m2_agent_id] = map[m.m2_agent_id] || []).push(agent.agent_id);
+    }
+  }
+  return map;
+}
+
+function resolveFrontendAgentId(task, deliverableTypeToFrontend, m2AgentToFrontendIds) {
+  if (task.deliverable_type && deliverableTypeToFrontend[task.deliverable_type]) {
+    return deliverableTypeToFrontend[task.deliverable_type];
+  }
+  const candidates = m2AgentToFrontendIds[task.agent_id] || [];
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 export function useMeetingRoomDataFromPlan(planId, refetchToken = 0) {
@@ -224,10 +308,17 @@ export function useMeetingRoomDataFromPlan(planId, refetchToken = 0) {
     setState({ loading: true, error: null, data: null });
     Promise.all([
       api.get(`/m2/plans/${planId}`),
-      api.get(`/m2/plans/${planId}/deliverables`).catch(() => ({ data: { deliverables: [] } })),
-      fetchM2ToFrontendAgentMap(),
+      // Solo un guasto genuinamente secondario del sotto-fetch deliverable
+      // diventa "nessun deliverable": un 401 (sessione scaduta) deve restare
+      // un errore vero, altrimenti la Sala Riunioni mostrerebbe una stanza
+      // vuota invece di segnalare che occorre accedere di nuovo.
+      api.get(`/m2/plans/${planId}/deliverables`).catch((e) => {
+        if (e.response?.status === 401) throw e;
+        return { data: { deliverables: [] } };
+      }),
+      fetchAgentMappings(),
     ])
-      .then(([planRes, delivRes, m2ToFrontend]) => {
+      .then(([planRes, delivRes, agentMappings]) => {
         if (cancelled) return;
         const plan = planRes.data.plan || {};
         const tasks = planRes.data.tasks || [];
@@ -238,12 +329,20 @@ export function useMeetingRoomDataFromPlan(planId, refetchToken = 0) {
         }
         const activeAgentIds = plan.active_agent_ids || [];
 
+        const deliverableTypeToFrontend = buildDeliverableTypeToFrontendAgent(agentMappings);
+        const m2AgentToFrontendIds = buildM2AgentToFrontendAgents(agentMappings);
+
         // Un agent_id puo' avere piu' task (es. copywriter: 'social' + 'email'):
         // il task piu' "significativo" (non terminale > terminale, piu' recente)
-        // guida lo stato del collaboratore in sala riunioni.
+        // guida lo stato del collaboratore in sala riunioni. La risoluzione
+        // ruolo-frontend e' uno-a-molti (vedi resolveFrontendAgentId sopra):
+        // ogni task risolve al proprio ruolo tramite il proprio
+        // deliverable_type, quindi due task sullo stesso m2_agent_id ma con
+        // deliverable_type diverso (es. editorial_plan/social_content su
+        // "content_social") popolano DUE slot frontend distinti, non uno solo.
         const taskByFrontendAgent = {};
         for (const task of tasks) {
-          const frontendId = m2ToFrontend[task.agent_id];
+          const frontendId = resolveFrontendAgentId(task, deliverableTypeToFrontend, m2AgentToFrontendIds);
           if (!frontendId) continue;
           const existing = taskByFrontendAgent[frontendId];
           if (!existing || (existing.task_status === "COMPLETATA" && task.task_status !== "COMPLETATA")) {
@@ -282,7 +381,13 @@ export function useMeetingRoomDataFromPlan(planId, refetchToken = 0) {
             ] : [{ label: "Squadra convocata", time: "—", state: "done" }],
           };
         });
-        const coordinatorSeat = buildCoordinatorSeat();
+        const coordinatorStatus = coordinatorStatusFromPlan(plan, tasks);
+        const coordinatorSeat = buildCoordinatorSeat({
+          status: coordinatorStatus,
+          activity: coordinatorActivityFromPlan(coordinatorStatus),
+          document: null,
+          history: coordinatorHistoryFromPlan(plan, coordinatorStatus),
+        });
         const seats = [OWNER, coordinatorSeat, ...collaboratorSeats];
         setState({
           loading: false, error: null,
