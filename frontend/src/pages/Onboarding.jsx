@@ -7,6 +7,15 @@ import { Search, CheckCircle2, AlertTriangle } from "lucide-react";
 
 const METHOD_LABEL = { DICHIARATO: "Dichiarato", ESTRATTO: "Estratto", DEDOTTO: "Dedotto", VERIFICATO: "Verificato" };
 
+// Esiti del fetch reale (domains/discovery.py: ESITO_LETTO/…) — un'etichetta
+// leggibile per ciascuno, mai un generico "trovato/non trovato".
+const REAL_FETCH_ESITO_LABEL = {
+  CONTENUTO_LETTO: "Pagina letta realmente",
+  CONTENUTO_INSUFFICIENTE_RICHIEDE_JS: "Pagina raggiunta ma richiede JavaScript: contenuto insufficiente",
+  ACCESSO_IMPEDITO: "Accesso impedito",
+  NESSUN_RISULTATO: "Pagina raggiunta ma senza contenuto utilizzabile",
+};
+
 export default function Onboarding() {
   const navigate = useNavigate();
   const [status, setStatus] = useState(null);
@@ -17,10 +26,15 @@ export default function Onboarding() {
   const pollRef = useRef(null);
 
   const load = useCallback(async () => {
-    const [s, f, c] = await Promise.all([
+    const [s, f, c, runs] = await Promise.all([
       api.get("/onboarding/status"), api.get("/knowledge/facts/current"), api.get("/knowledge/conflicts"),
+      // Ultima ricerca gia' persistita (mai solo lo stato in memoria dalla
+      // risposta di un POST precedente): cosi' l'esito resta consultabile
+      // anche dopo un refresh della pagina, senza avviare nulla di nuovo.
+      api.get("/discovery/runs").catch(() => ({ data: [] })),
     ]);
     setStatus(s.data); setFacts(f.data); setConflicts(c.data);
+    if (runs.data?.length > 0) setDiscoveryRun(runs.data[0]);
   }, []);
 
   useEffect(() => { load().catch(() => {}); }, [load]);
@@ -82,11 +96,58 @@ export default function Onboarding() {
       />
 
       {discoveryRun && (
-        <Card className="p-4 mb-4 text-sm">
-          <span className="label-caps mr-2">Discovery (SIMULATO)</span>
-          <span className="font-mono">{discoveryRun.status}</span>
+        <Card className="p-4 mb-4 text-sm" data-testid="discovery-summary">
+          <div className="flex items-center gap-2 flex-wrap mb-2">
+            <span className="label-caps">Ultima Discovery</span>
+            <span className="font-mono">{discoveryRun.status}</span>
+          </div>
+          {/* 'mode' del run resta sempre "SIMULATO" per costruzione (vedi
+              domains/discovery.py): descrive SOLO la stima euristica di
+              tono/pubblico (sempre calcolata, mai una lettura reale). La
+              lettura reale del sito e' una fase A SE' STANTE, tracciata
+              SOLO in real_fetch.esito — le due etichette convivono apposta,
+              non sono in contraddizione: due fasi diverse dello stesso run. */}
+          <div className="grid sm:grid-cols-2 gap-2 mb-2">
+            <div className="border border-border/60 rounded-sm px-3 py-2">
+              <div className="text-[10px] font-mono text-muted-foreground mb-0.5">FASE 1 · stima tono/pubblico</div>
+              <div className="text-xs">Sempre simulata (euristica per dominio, mai una lettura reale) — vedi affidabilità 70% in tabella, senza evidenza.</div>
+            </div>
+            <div className="border border-border/60 rounded-sm px-3 py-2">
+              <div className="text-[10px] font-mono text-muted-foreground mb-0.5">FASE 2 · lettura reale del sito</div>
+              <span
+                data-testid="discovery-fetch-badge"
+                className={`inline-block text-[10px] font-mono px-1.5 py-0.5 rounded-sm ${discoveryRun.real_fetch?.esito === "CONTENUTO_LETTO" ? "bg-emerald-500/15 text-emerald-500" : discoveryRun.real_fetch ? "bg-amber-500/15 text-amber-500" : "bg-muted text-muted-foreground"}`}
+              >
+                {discoveryRun.real_fetch
+                  ? (REAL_FETCH_ESITO_LABEL[discoveryRun.real_fetch.esito] || discoveryRun.real_fetch.esito)
+                  : "Permesso non concesso: nessun tentativo di lettura reale"}
+              </span>
+            </div>
+          </div>
           {discoveryRun.warnings?.length > 0 && (
-            <span className="text-amber-500 ml-3">{discoveryRun.warnings.join(" · ")}</span>
+            <div className="text-amber-500 text-xs mb-2">{discoveryRun.warnings.join(" · ")}</div>
+          )}
+          {discoveryRun.status === "COMPLETATO" && (
+            discoveryRun.real_fetch ? (
+              <div className="text-xs text-muted-foreground space-y-1" data-testid="discovery-real-fetch">
+                <div>
+                  Fonte: <a href={discoveryRun.real_fetch.url} target="_blank" rel="noreferrer"
+                    className="underline hover:text-foreground">{discoveryRun.real_fetch.url}</a>
+                  {discoveryRun.real_fetch.acquisito_il ? ` · acquisita il ${discoveryRun.real_fetch.acquisito_il}` : ""}
+                  {discoveryRun.real_fetch.via_rendering_js ? " · via rendering JS (fallback)" : ""}
+                </div>
+                <div data-testid="discovery-social-found">
+                  {discoveryRun.real_fetch.social_links?.length > 0
+                    ? `Collegamenti social individuati sulla pagina esaminata: ${discoveryRun.real_fetch.social_links.join(", ")}`
+                    : "Nessun collegamento social trovato nella pagina esaminata (non significa che l'azienda non abbia social)."}
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground" data-testid="discovery-no-real-fetch">
+                Nessuna pagina web è stata letta realmente in questa ricerca (permesso Discovery non concesso in
+                quel momento): tono e pubblico sopra restano una stima euristica, non un'estrazione dal sito.
+              </div>
+            )
           )}
         </Card>
       )}
@@ -142,27 +203,58 @@ export default function Onboarding() {
       )}
 
       <Card className="p-5">
-        <div className="label-caps mb-3">Fact Ledger — profilo aziendale condiviso</div>
+        <div className="label-caps mb-1">Fact Ledger — profilo aziendale condiviso</div>
+        <div className="text-xs text-muted-foreground mb-3">
+          "Estratto" = candidato letto da una fonte reale (mai una dichiarazione confermata dall'utente); "Estratto
+          (euristica)" = stima automatica senza lettura reale, nessuna evidenza puntuale disponibile.
+        </div>
         {factRows.length === 0 ? <Empty text="Nessun fatto registrato." /> : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-muted-foreground label-caps text-xs">
                   <th className="py-2 pr-4">Campo</th><th className="py-2 pr-4">Valore</th>
-                  <th className="py-2 pr-4">Metodo</th><th className="py-2 pr-4">Fonte</th>
+                  <th className="py-2 pr-4">Provenienza</th><th className="py-2 pr-4">Evidenza</th>
                   <th className="py-2 pr-4">Affidabilità</th>
                 </tr>
               </thead>
               <tbody>
-                {factRows.map((f) => (
-                  <tr key={f.id} className="border-t border-border/40">
-                    <td className="py-2 pr-4 font-mono text-xs">{f.field}</td>
-                    <td className="py-2 pr-4">{f.value}</td>
-                    <td className="py-2 pr-4">{METHOD_LABEL[f.method] || f.method}</td>
-                    <td className="py-2 pr-4 text-muted-foreground">{f.source}</td>
-                    <td className="py-2 pr-4 font-mono">{Math.round((f.confidence || 0) * 100)}%</td>
-                  </tr>
-                ))}
+                {factRows.map((f) => {
+                  const evidenze = f.evidence || [];
+                  const ultima = evidenze.length > 0 ? evidenze[evidenze.length - 1] : null;
+                  const provenienza = f.method === "DICHIARATO"
+                    ? "Dichiarato dall'utente"
+                    : evidenze.length > 0
+                      ? `${METHOD_LABEL[f.method] || f.method} · con evidenza`
+                      : `${METHOD_LABEL[f.method] || f.method} · euristica, senza evidenza`;
+                  return (
+                    <tr key={f.id} className="border-t border-border/40" data-testid={`fact-row-${f.field}`}>
+                      <td className="py-2 pr-4 font-mono text-xs align-top">{f.field}</td>
+                      <td className="py-2 pr-4 align-top">{f.value}</td>
+                      <td className="py-2 pr-4 align-top text-xs" data-testid={`fact-provenance-${f.field}`}>
+                        {provenienza}
+                        <div className="text-muted-foreground">fonte: {f.source}</div>
+                      </td>
+                      <td className="py-2 pr-4 align-top text-xs max-w-xs" data-testid={`fact-evidence-${f.field}`}>
+                        {ultima ? (
+                          <div className="space-y-0.5">
+                            <a href={ultima.url} target="_blank" rel="noreferrer"
+                              className="underline hover:text-foreground break-all">{ultima.url}</a>
+                            <div className="text-muted-foreground">acquisita il {ultima.acquisito_il}</div>
+                            {ultima.estratto && (
+                              <div className="text-muted-foreground italic">"{ultima.estratto.slice(0, 140)}{ultima.estratto.length > 140 ? "…" : ""}"</div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground" data-testid={`fact-no-evidence-${f.field}`}>
+                            Nessuna evidenza puntuale disponibile{f.method === "DICHIARATO" ? "" : " (stima euristica)"}.
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-4 font-mono align-top">{Math.round((f.confidence || 0) * 100)}%</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

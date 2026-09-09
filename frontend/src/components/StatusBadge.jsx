@@ -89,6 +89,9 @@ const MAP = {
   APPROVAL_REQUIRED: "bg-violet-500/15 text-violet-400 border-violet-500/30",
   // Content Creator: domains/content_creator (content_items)
   IN_ATTESA_ASSET: "bg-teal-500/15 text-teal-400 border-teal-500/30 animate-pulse",
+  // Revisione editoriale su bozze di deliverable multi-item (m2/deliverable_review.py)
+  IN_ATTESA_REVISIONE: "bg-violet-500/15 text-violet-400 border-violet-500/30",
+  MODIFICA_RICHIESTA: "bg-amber-500/15 text-amber-400 border-amber-500/30",
   // Sales Agent: domains/sales (sales_opportunities, pipeline stages)
   NUOVO: "bg-slate-500/15 text-slate-300 border-slate-500/30",
   IN_ANALISI: "bg-blue-500/15 text-blue-400 border-blue-500/30 animate-pulse",

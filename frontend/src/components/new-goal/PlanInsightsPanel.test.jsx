@@ -10,6 +10,7 @@ const PIANO_COMPLETO = {
   rischi_valutati: [{ categoria: "spesa", severita: "MEDIA", azione: "APPROVAL" }],
   kpi: ["engagement"], approvazioni_necessarie: ["pubblicazione"],
   assunzioni: ["pubblico gia' noto"],
+  dati_non_disponibili: ["ROAS storico delle campagne precedenti"],
   correzioni: [{ tipo: "capability_scartata", dettaglio: "'leadgen' scartata." }],
 };
 
@@ -38,6 +39,13 @@ describe("PlanInsightsPanel", () => {
     expect(panel).toHaveTextContent("pubblicazione");
     expect(panel).toHaveTextContent("pubblico gia' noto");
     expect(panel).toHaveTextContent("leadgen");
+    expect(panel).toHaveTextContent("ROAS storico delle campagne precedenti");
+  });
+
+  it("mostra i dati non disponibili senza bloccare né inventare nulla", () => {
+    render(<PlanInsightsPanel normalizedPlan={PIANO_COMPLETO} />);
+    const sezione = screen.getByTestId("dati-non-disponibili");
+    expect(sezione).toHaveTextContent("ROAS storico delle campagne precedenti");
   });
 
   it("nasconde la sezione budget quando NON_APPLICABILE", () => {
@@ -53,6 +61,7 @@ describe("PlanInsightsPanel", () => {
     expect(panel).not.toHaveTextContent("KPI");
     expect(panel).not.toHaveTextContent("Approvazioni necessarie");
     expect(panel).not.toHaveTextContent("Assunzioni");
+    expect(panel).not.toHaveTextContent("Dati non disponibili");
     expect(panel).not.toHaveTextContent("Correzioni applicate dal validatore");
     expect(panel.textContent).not.toMatch(/undefined|null/);
   });

@@ -92,7 +92,8 @@ from .planning.agent_selector import (
 )
 from .planning.handoff import HANDOFF_READY, collect_task_handoffs
 from . import llm_understanding
-from .llm_validator import validate_and_normalize
+from .llm_validator import MAX_DOMANDE_CHIARIMENTO, validate_and_normalize
+from .quantity import extract_requested_quantity_detailed as _extract_requested_quantity_detailed
 from .risk_registry import AZIONE_APPROVAL, AZIONE_BLOCK, AZIONE_CLARIFICATION, AZIONE_REVIEW_TASK
 from .producers import produce_brain_deliverable
 from ..domains.knowledge import current_facts_map
@@ -105,6 +106,14 @@ from fastapi import HTTPException
 
 _ACTOR_SELECTOR = "brain.planning.agent_selector"
 _ACTOR_SERVICE = "brain.service"
+
+# Stima di costo REALE per singola generazione Content Creator (stessa cifra
+# usata dal gateway come stima prima della chiamata, tools/gateway.py via
+# domains/content_creator/pipeline.py::generate_content_item,
+# estimated_cost=0.01): usata SOLO per rendere onesto/proporzionale il tetto
+# di spesa del piano (mai per autorizzare la chiamata, che resta comunque
+# soggetta a tool_gateway.authorize/check_budget al momento reale).
+_CONTENT_ITEM_STIMA_COSTO_UNITARIO = 0.01
 
 
 # ==================== Persistenza (CEO Agent 100% reale) ====================
@@ -397,17 +406,69 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
             "nome_commerciale": "Azienda/brand",
             "prodotto": "Prodotto/servizio",
             "servizio": "Prodotto/servizio",
+            # Discovery reale (domains/discovery.py::fetch_sito_reale) scrive
+            # candidati prodotto/servizio con QUESTO nome di campo, diverso
+            # da 'prodotto'/'servizio' sopra (mai una fusione silenziosa dei
+            # due: un'inferenza euristica dal sito e una dichiarazione
+            # dell'utente restano fatti distinti) — senza questa voce, un
+            # dato gia' raccolto da Discovery non evitava la domanda di
+            # chiarimento "quale prodotto/servizio", perche' quel controllo
+            # cercava solo le chiavi sopra.
+            "prodotti_servizi_candidati": "Prodotto/servizio",
             "settore": "Settore",
             "sito_web": "Sito web",
             "obiettivi_commerciali": "Obiettivo aziendale",
         }
         additions = []
         already = goal_text.lower()
+        # Azienda/prodotto: la sola presenza del NOME da qualche parte nel
+        # testo libero (already, sopra) NON basta per considerarli "gia'
+        # detti" — context.py::extract_goal_context (usata piu' sotto da
+        # triage_goal per un secondo controllo indipendente, "doppia rete di
+        # sicurezza") li riconosce SOLO in forma etichettata ("Azienda:"/
+        # "Brand:"/"Prodotto:") o in pochi pattern euristici rigidi (es. "le
+        # X del ristorante DEL Bar Rossi"). Una frase perfettamente naturale
+        # come "... dedicate a SPI Pension DI SPI Tool" non ha ne' l'
+        # etichetta ne' quel pattern: senza questo controllo aggiuntivo, la
+        # comprensione gia' riuscita dell'LLM (che readava benissimo "SPI
+        # Tool"/"SPI Pension") veniva scartata e l'utente rivedeva comunque
+        # la domanda di chiarimento su azienda/prodotto — un fatto gia'
+        # disponibile trattato come mancante. Verificato PRIMA di ogni voce:
+        # se il regex-check di context.py risolve gia' il campo, l'etichetta
+        # non serve; altrimenti va aggiunta anche se il nome compare altrove
+        # nel testo in forma libera.
+        ctx_pre = extract_goal_context(goal_text)
+        azienda_gia_risolta_da_regex = bool(ctx_pre.azienda)
+        prodotto_gia_risolto_da_regex = bool(ctx_pre.prodotto)
         for field, label in labels.items():
-            fact = facts.get(field)
-            value = str((fact or {}).get("value") or "").strip()
-            if value and value.lower() not in already:
+            fact = facts.get(field) or {}
+            value = str(fact.get("value") or "").strip()
+            if not value:
+                continue
+            if label == "Azienda/brand":
+                if azienda_gia_risolta_da_regex:
+                    continue
+            elif label == "Prodotto/servizio":
+                if prodotto_gia_risolto_da_regex:
+                    continue
+            elif value.lower() in already:
+                continue
+            metodo = fact.get("method")
+            if metodo in ("DICHIARATO", "VERIFICATO"):
                 additions.append(f"{label}: {value}.")
+            else:
+                # ESTRATTO/DEDOTTO: un'inferenza (da Discovery o euristica),
+                # MAI presentata al brain come un fatto confermato — la
+                # confidence reale del Fact Ledger viaggia col testo, cosi'
+                # il brain (e chi rilegge la sessione) sa che e' un
+                # candidato, non una dichiarazione dell'utente. Evita
+                # comunque la domanda di chiarimento ridondante, che
+                # resterebbe il problema peggiore (nessuna informazione).
+                confidenza = fact.get("confidence")
+                nota_confidenza = f", confidence {confidenza:.2f}" if isinstance(confidenza, (int, float)) else ""
+                additions.append(
+                    f"{label}: {value} — candidato estratto (non confermato dall'utente{nota_confidenza})."
+                )
         if additions:
             goal_text = f"{goal_text.strip()} {' '.join(additions)}".strip()
 
@@ -588,7 +649,14 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
     if rischi_bloccanti:
         selection.risk_flags = list(dict.fromkeys(selection.risk_flags + rischi_bloccanti))
 
-    domande_extra = list(normalized.domande_aggiuntive)
+    # Priorita' fissa (fix P0 UX "Clarification Engine"): budget/rischio sono
+    # sempre REQUIRED_TO_START quando presenti (gate di sicurezza/spesa gia'
+    # esistenti, MAI indeboliti), quindi vanno per primi; le domande libere
+    # proposte dall'LLM (gia' filtrate da llm_validator.py::classify_missing_data
+    # per rimuovere dati CAN_BE_RESEARCHED/USEFUL_BUT_OPTIONAL) vengono per
+    # ultime. L'intero elenco resta comunque capped a MAX_DOMANDE_CHIARIMENTO:
+    # mai un form da 10-20 campi in un solo ciclo.
+    domande_extra = []
     motivi_escalation = []
     if normalized.richiede_chiarimento_budget:
         _log(EVENT_BUDGET_CLARIFICATION_REQUIRED, actor=_ACTOR_SERVICE, decision="NEEDS_CLARIFICATION",
@@ -610,12 +678,36 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
                 if domanda.strip().lower() not in chiarimenti_gia_dati:
                     domande_extra.append(domanda)
 
-    if domande_extra:
+    for d in normalized.domande_aggiuntive:
+        if d.strip().lower() not in chiarimenti_gia_dati and d not in domande_extra:
+            domande_extra.append(d)
+
+    dati_non_disponibili = list(normalized.dati_non_disponibili)
+    if len(domande_extra) > MAX_DOMANDE_CHIARIMENTO:
+        dati_non_disponibili.extend(domande_extra[MAX_DOMANDE_CHIARIMENTO:])
+        domande_extra = domande_extra[:MAX_DOMANDE_CHIARIMENTO]
+
+    # "Dopo massimo un ciclo di chiarimento": se questa e' gia' una
+    # ri-esaminazione (l'utente ha gia' risposto a un chiarimento precedente
+    # per questa stessa sessione), non si chiede una seconda volta — le
+    # domande eventualmente ancora aperte diventano dati dichiarati mancanti
+    # (mai bloccanti, mai inventati) e si procede comunque alla creazione del
+    # piano sotto.
+    if domande_extra and not is_reexamination:
         _log(EVENT_CLARIFICATION_REQUIRED, actor=_ACTOR_SERVICE, decision="NEEDS_CLARIFICATION",
              reason="Dati mancanti individuati dalla proposta LLM o rischio da chiarire" + (
                  f" ({'; '.join(motivi_escalation)})" if motivi_escalation else ""),
              metadata={"domande": domande_extra})
         store.update_session(sid, status="NEEDS_CLARIFICATION")
+        # Bug reale trovato in prova (queste domande, a differenza di quelle di
+        # selection.clarifying_questions gia' salvate in prepare_brain_session,
+        # non venivano mai scritte in session.clarifications): un refresh a
+        # meta' di QUESTO tipo di chiarimento perdeva le domande (la ripresa in
+        # NewGoal.jsx legge sess.clarifications), e il riesame successivo non
+        # poteva riconoscerle come "gia' poste" in chiarimenti_gia_dati (righe
+        # 530-536 sopra), rischiando di riproporle identiche.
+        for d in domande_extra:
+            store.append_to_session(sid, "clarifications", {"question": d, "answer": None})
         payload = _selection_payload(selection)
         payload.update({
             "plan": None, "tasks": [], "requires_clarification": True,
@@ -627,6 +719,12 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
         })
         await _persist_all(db, org_id, store, audit_log, sid)
         return payload
+    if domande_extra and is_reexamination:
+        dati_non_disponibili = dati_non_disponibili + domande_extra
+    # Mutato sul piano normalizzato stesso: cosi' ogni uso successivo di
+    # normalized.come_dict() (payload finale, brain_trace) espone lo stesso
+    # elenco onesto di dati non disponibili, mai un secondo canale separato.
+    normalized.dati_non_disponibili = dati_non_disponibili
 
     if normalized.azione_rischio_aggregata in (AZIONE_BLOCK, AZIONE_APPROVAL, AZIONE_REVIEW_TASK):
         # Non blocca ne' chiede chiarimento: il piano procede, ma il rischio
@@ -956,11 +1054,13 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
     # laboratorio Content Creator — mai un contenuto gia' generato qui (la
     # generazione e' sempre un'azione esplicita e confermata, mai automatica).
     if "content" in selection.detected_intents:
+        _qty_info = _extract_requested_quantity_detailed(goal_text)
+        quantita_richiesta = _qty_info["quantity"]
         try:
             risultato_content = await content_creator_pipeline.create_content_item(
                 db, org_id=org_id, actor=user_id, objective=goal_text, channel="generico",
                 funnel_stage="MOFU", content_type=None, campaign_id=None, tone_override=None,
-                constraints="", brief=goal_text,
+                constraints="", brief=goal_text, quantity=quantita_richiesta,
             )
         except ValueError as exc:
             _log(EVENT_ERROR_FALLBACK, actor=_ACTOR_SERVICE, decision="FALLBACK_M2_DEFAULT",
@@ -970,25 +1070,65 @@ async def create_plan_with_brain(db, org_id: str, user_id: str, goal_text: str, 
             content_mapping = mapping_by_capability("content")
             ultimo = await db.tasks.find({"plan_id": plan["id"]}).sort("seq", -1).to_list(1)
             seq = (ultimo[0]["seq"] + 1) if ultimo else 1
+            content_item_ids = [i["id"] for i in risultato_content["items"]]
+            # Stima realistica (non 0.0): una chiamata reale per content_item
+            # (vedi content_creator/pipeline.py::generate_content_item,
+            # tool_gateway estimated_cost=0.01) — rende il tetto del piano
+            # onesto e proporzionale alla quantita' richiesta, invece di un
+            # cap sempre a zero che il controllo di budget non applicherebbe
+            # mai al costo reale.
+            costo_stimato = round(_CONTENT_ITEM_STIMA_COSTO_UNITARIO * len(content_item_ids), 6)
+            task_warnings = []
+            if _qty_info["truncated"]:
+                # Mai un limite applicato in silenzio: l'utente ha chiesto
+                # piu' del tetto consentito in un solo obiettivo — lo si
+                # dichiara esplicitamente sul task stesso (visibile in
+                # interfaccia), non solo nel log.
+                task_warnings.append(
+                    f"Richiesti {_qty_info['raw']} contenuti nel testo dell'obiettivo: limitati a "
+                    f"{quantita_richiesta} (tetto per singolo obiettivo). Per il resto, crea un nuovo obiettivo "
+                    "separato.")
             content_task = new_task(
                 org_id, user_id, plan["id"], goal_id, plan["version"], seq,
                 name="Content Creator — produzione contenuti",
                 agent_id=content_mapping.frontend_agent_id if content_mapping else "content-creator",
                 deliverable_type="content_item",
-                inputs={"cost": 0.0, "deliverable_override": {
-                    "content_item_ids": [i["id"] for i in risultato_content["items"]], "mode": "REALE",
+                inputs={"cost": costo_stimato, "requested_quantity": len(content_item_ids),
+                       "requested_quantity_raw": _qty_info["raw"], "deliverable_override": {
+                    "content_item_ids": content_item_ids, "mode": "REALE",
                     "note": "Genera e approva il contenuto in Content Creator — laboratorio.",
                 }},
                 depends_on=[],
             )
+            if task_warnings:
+                content_task["warnings"] = task_warnings
             await db.tasks.insert_one(content_task)
-            await db.plans.update_one({"id": plan["id"]}, {"$push": {
-                "dag.nodes": content_task["id"], "topo_order": content_task["id"],
-            }})
+            await db.plans.update_one({"id": plan["id"]}, {
+                "$push": {"dag.nodes": content_task["id"], "topo_order": content_task["id"]},
+                # approved_cap E il preventivo annidato (plan.estimate.*) devono
+                # restare la STESSA cifra vista da due punti diversi — mai un
+                # "tetto" invisibile che esiste solo in approved_cap mentre la
+                # UI (Sala Riunioni, dettaglio piano) legge plan.estimate e
+                # mostra $0.00000. Nessun margine di incertezza aggiunto qui
+                # (a differenza di estimate_for_agents): costo_stimato e' gia'
+                # la cifra reale usata da tool_gateway.authorize per ogni
+                # content_item (vedi real_content_creator.py), non una proiezione.
+                "$inc": {
+                    "approved_cap": costo_stimato,
+                    "estimate.cost_min": costo_stimato,
+                    "estimate.cost_probable": costo_stimato,
+                    "estimate.cost_max": costo_stimato,
+                    "estimate.approvable_cap": costo_stimato,
+                    "estimate.calls_estimated": len(content_item_ids),
+                    "estimate.external_tools_cost": costo_stimato,
+                },
+            })
             _log(EVENT_PLAN_ALLOWED, actor=_ACTOR_SERVICE, decision="CONTENT_TASK_LINKED",
                  reason="Task 'content_item' aggiunto al piano M2, collegato al laboratorio reale in domains/content_creator.",
                  goal_id=goal_id, plan_id=plan["id"],
-                 metadata={"task_id": content_task["id"], "content_item_ids": [i["id"] for i in risultato_content["items"]]})
+                 metadata={"task_id": content_task["id"], "content_item_ids": content_item_ids,
+                          "requested_quantity": len(content_item_ids), "requested_quantity_raw": _qty_info["raw"],
+                          "truncated": _qty_info["truncated"], "approved_cap_incrementato": costo_stimato})
 
     # Stesso pattern REALE di leadgen/content: un report REALE (dati gia'
     # presenti, mai inventati) e' calcolato subito, con time_range_days di

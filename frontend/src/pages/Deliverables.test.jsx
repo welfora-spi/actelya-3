@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import Deliverables from "@/pages/Deliverables";
 import api from "@/lib/api";
+import { AuthProvider } from "@/context/AuthContext";
 
 jest.mock("@/lib/api", () => {
   const get = jest.fn();
@@ -69,5 +71,54 @@ describe("Deliverables — dispatch esplicito per deliverable_type", () => {
     await renderWithRows([row({ id: "d-empty", deliverable_type: "analyst_report", content: {} })]);
     expect(screen.getByTestId("generic-deliverable-empty")).toBeInTheDocument();
     expect(screen.queryByTestId("email-preview")).not.toBeInTheDocument();
+  });
+
+  it("content_item usa il proprio renderer dedicato, mai il fallback generico ne' JSON grezzo come presentazione principale", async () => {
+    const d = row({
+      id: "d-content-item", deliverable_type: "content_item", status: "COMPLETATO_CON_AVVISI",
+      content: {
+        content_item_ids: ["c1"], requested_quantity: 1, produced_count: 1, contested_ids: [],
+        items: [{ content_item_id: "c1", content_type: "post_social", status: "IN_ATTESA_APPROVAZIONE",
+                 content: { titolo: "T", corpo: "Corpo leggibile", cta: "Vai", hashtags: [], varianti: [] },
+                 semantic_check: { status: "OK", affermazioni_contestate: [] } }],
+      },
+    });
+    api.get.mockImplementation((url) => {
+      if (url === "/deliverables") return Promise.resolve({ data: [d] });
+      if (url === "/auth/me") return Promise.resolve({ data: { user: { id: "u1", email: "a@b.it", role: "ADMIN", organization_id: "org-1" } } });
+      return Promise.reject(new Error("unexpected " + url));
+    });
+    render(
+      <MemoryRouter initialEntries={["/deliverable"]}>
+        <AuthProvider><Deliverables /></AuthProvider>
+      </MemoryRouter>
+    );
+    expect(await screen.findByTestId("content-item-deliverable-preview")).toBeInTheDocument();
+    expect(screen.getByText("Corpo leggibile")).toBeInTheDocument();
+    expect(screen.queryByTestId("generic-deliverable-preview")).not.toBeInTheDocument();
+    // il JSON resta un dettaglio opzionale collassato, non la presentazione principale
+    const details = document.querySelector("details");
+    expect(details.open).toBeFalsy();
+  });
+
+  it("mostra lo stato editoriale di ciascuna bozza (allineato al dettaglio piano), quando presente", async () => {
+    await renderWithRows([
+      row({
+        id: "d-soc", deliverable_type: "social_content", content: { platform: "Instagram", posts: [] },
+        item_decisions: [
+          { item_index: 0, current_version: 2, decision: { status: "MODIFICA_RICHIESTA" } },
+          { item_index: 1, current_version: 1, decision: { status: "APPROVATO" } },
+        ],
+      }),
+    ]);
+    const riepilogo = await screen.findByTestId("item-decisions-summary");
+    expect(riepilogo.querySelector('[data-testid="item-decisions-summary-row-0"]')).toHaveTextContent("v2");
+    expect(riepilogo.querySelector('[data-testid="item-decisions-summary-row-0"]')).toHaveTextContent("MODIFICA_RICHIESTA");
+    expect(riepilogo.querySelector('[data-testid="item-decisions-summary-row-1"]')).toHaveTextContent("APPROVATO");
+  });
+
+  it("nessun riepilogo di stato bozze per un deliverable senza item_decisions", async () => {
+    await renderWithRows([row({ id: "d-email", deliverable_type: "email", content: { oggetto: "Ciao", contenuto_completo: "Corpo" } })]);
+    expect(screen.queryByTestId("item-decisions-summary")).not.toBeInTheDocument();
   });
 });

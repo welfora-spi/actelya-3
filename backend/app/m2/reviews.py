@@ -19,6 +19,24 @@ def _max_sev(findings):
     return max(findings, key=lambda f: _SEV_ORDER.get(f.get("severity", "info"), 0))["severity"]
 
 
+def _testo_leggibile(valore) -> str:
+    """Concatena SOLO le stringhe foglia di un contenuto (ricorsivo su dict/list),
+    mai la sintassi JSON che le racchiude. Bug reale trovato in prova (2026-09-09):
+    PLACEHOLDER_RE (r"\\[[^\\]]+\\]") applicato a json.dumps(content) intercetta anche
+    le parentesi quadre di QUALUNQUE campo lista JSON (es. "hashtags": ["#a", "#b"]),
+    non solo segnaposto testuali reali (es. "[NOME AZIENDA]") — falso positivo
+    sistematico su ogni deliverable con un campo lista (hashtags, posts, canali,
+    segmenti target...), che sminuisce l'affidabilità dei rilievi mostrati in
+    revisione editoriale."""
+    if isinstance(valore, str):
+        return valore
+    if isinstance(valore, dict):
+        return " ".join(_testo_leggibile(v) for v in valore.values())
+    if isinstance(valore, list):
+        return " ".join(_testo_leggibile(v) for v in valore)
+    return ""
+
+
 async def _audit(db, *, org_id, actor, action, entity_id, details=None):
     await db.audit_logs.insert_one({
         "id": new_id("audit"), "organization_id": org_id, "actor": actor, "action": action,
@@ -43,7 +61,7 @@ def run_compliance(deliverable, task):
     if dtype == "ad_campaign_draft" and content.get("status") != "DRAFT":
         findings.append({"code": "CAMPAIGN_STATUS", "severity": "high",
                          "message": "La campagna deve restare in stato DRAFT (mai pubblicata)."})
-    if PLACEHOLDER_RE.search(text):
+    if PLACEHOLDER_RE.search(_testo_leggibile(content)):
         findings.append({"code": "PLACEHOLDER", "severity": "info",
                          "message": "Presenti placeholder da personalizzare prima dell'uso."})
     if deliverable.get("status") == "BLOCCATO":
@@ -66,9 +84,18 @@ def run_audit(deliverable, task):
         if v in (None, ""):
             findings.append({"code": "MISSING_LINK", "severity": "high",
                              "message": f"Collegamento mancante: {k}."})
-    if deliverable.get("mode") != "SIMULAZIONE":
+    # Bug reale trovato in prova (2026-09-09): questo controllo risale al
+    # Blocco 6, quando la generazione REALE non esisteva ancora e QUALUNQUE
+    # valore diverso da "SIMULAZIONE" era per forza un'anomalia. Da quando
+    # REALE e' un percorso legittimo e autorizzato (vedi m2/real_content.py,
+    # m2/real_content_creator.py), questo alert HIGH scattava anche su un
+    # deliverable reale corretto — un falso allarme che confonde chi fa la
+    # revisione editoriale, mai un'anomalia da segnalare in se'. I soli
+    # valori validi restano questi due: solo un terzo valore (assente/
+    # corrotto) e' davvero un'incoerenza.
+    if deliverable.get("mode") not in ("SIMULAZIONE", "REALE"):
         findings.append({"code": "MODE", "severity": "high",
-                         "message": "Deliverable non in modalità SIMULAZIONE."})
+                         "message": f"Modalita' deliverable non valida: {deliverable.get('mode')!r}."})
     text = json.dumps(deliverable.get("content", {}), ensure_ascii=False).lower()
     if any(s in text for s in ("api_key", "password", "access_token", "secret")):
         findings.append({"code": "SECRET", "severity": "high",

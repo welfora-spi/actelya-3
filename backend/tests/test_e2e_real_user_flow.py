@@ -235,3 +235,43 @@ def test_regressione_p0_rischi_invio_spesa_dati_personali_non_bloccano_il_piano(
     assert body["tasks"]
     for t in body["tasks"]:
         assert t["task_status"] == "IN_ATTESA_APPROVAZIONE", t
+
+
+# ==================== Regressione P0 UX: Clarification Engine ====================
+# Secondo bug reale riscontrato durante un test utente: NEEDS_CLARIFICATION
+# chiedeva decine di campi (prodotti, prezzi, competitor, analytics, pixel,
+# ROAS, margini, target, pain point, funnel, CRM, campagne precedenti, USP,
+# testimonial, landing page...) invece di recuperare automaticamente cio' che
+# e' gia' dichiarato nell'obiettivo/Company Profile/Fact Ledger e chiedere
+# solo il minimo indispensabile. Questo test usa ESATTAMENTE il testo
+# riportato (stesso obiettivo del bug P0 precedente, arricchito con
+# settore/sito/obiettivo aziendale gia' dichiarati nel testo stesso).
+P0_UX_GOAL_TEXT_CON_CONTESTO = (
+    P0_BUG_GOAL_TEXT + " Settore: servizi informatici. Sito web: https://www.spitool.it/. "
+    "Obiettivo aziendale: sponsorizzazioni social."
+)
+
+
+def test_regressione_p0_ux_clarification_engine_non_chiede_dati_gia_dichiarati():
+    """ricerca automatica → massimo poche domande realmente indispensabili →
+    piano creato. Mai un form con 10-20 campi: brand/sito/settore/prodotto
+    gia' presenti nell'obiettivo non vengono mai richiesti di nuovo."""
+    org_id, token = register_tenant("Regressione P0 UX Clarification Co", password=TEST_PASSWORD)
+    h = _auth(token)
+
+    r = requests.post(f"{API}/brain/plans", headers=h, timeout=30, json={"text": P0_UX_GOAL_TEXT_CON_CONTESTO})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    # Mai il form-flood osservato nel bug: al massimo poche domande, mai un
+    # esito "bloccato" dalla sola profondita' del contesto richiesto.
+    assert len(body.get("clarifying_questions") or []) <= 5, body.get("clarifying_questions")
+    if body["status"] == "NEEDS_CLARIFICATION":
+        # Se resta anche un solo chiarimento realmente indispensabile, non
+        # deve mai ripetere campi gia' dichiarati nel testo.
+        for campo in ("settore", "sito web", "obiettivo aziendale", "spitool"):
+            assert not any(campo in q.lower() for q in body["clarifying_questions"]), body["clarifying_questions"]
+    else:
+        assert body["status"] == "READY", body
+        assert body["plan"] is not None and body["plan"]["id"]
+        assert body["tasks"], "il piano deve contenere almeno un task"

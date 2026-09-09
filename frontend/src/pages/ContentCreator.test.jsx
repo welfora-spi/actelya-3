@@ -100,6 +100,36 @@ test("nessun JSON grezzo viene mai renderizzato", async () => {
   expect(document.body.textContent).not.toMatch(/[{[]"[a-z_]+":/);
 });
 
+test("collegamento diretto ?item=<id>: apre subito il contenuto corretto, in sola lettura", async () => {
+  mockApiState = mockApi({ items: page([ITEM_BOZZA]), detail: ITEM_IN_ATTESA_APPROVAZIONE });
+  render(
+    <MemoryRouter initialEntries={["/content-creator?item=content-2"]}>
+      <AuthProvider><ContentCreator /></AuthProvider>
+    </MemoryRouter>
+  );
+  expect(await screen.findByTestId("content-item-body")).toHaveTextContent("Scopri la nostra offerta.");
+  expect(mockApiState.get).toHaveBeenCalledWith("/content-creator/items/content-2");
+  // sola lettura: nessuna azione di scrittura scatenata dall'apertura del link
+  expect(mockApiState.post).not.toHaveBeenCalled();
+});
+
+test("collegamento diretto a un contenuto non disponibile: messaggio esplicito, mai una scheda vuota o approvata", async () => {
+  const get = jest.fn((url) => {
+    if (url === "/auth/me") return Promise.resolve({ data: { user: { id: "u1", email: "a@b.it", role: "ADMIN", organization_id: "org-1" } } });
+    if (url === "/content-creator/items") return Promise.resolve({ data: page([ITEM_BOZZA]) });
+    if (url === "/content-creator/items/content-mancante") return Promise.reject({ response: { status: 404 } });
+    return Promise.reject({ response: { status: 404 } });
+  });
+  mockApiState = { get, post: jest.fn(() => Promise.resolve({ data: {} })) };
+  render(
+    <MemoryRouter initialEntries={["/content-creator?item=content-mancante"]}>
+      <AuthProvider><ContentCreator /></AuthProvider>
+    </MemoryRouter>
+  );
+  expect(await screen.findByTestId("content-item-deep-link-error")).toHaveTextContent("content-mancante");
+  expect(screen.queryByTestId("content-item-body")).not.toBeInTheDocument();
+});
+
 test("la lista usa la paginazione lato server (page/page_size)", async () => {
   mockApiState = mockApi();
   renderPage();

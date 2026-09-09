@@ -33,3 +33,9 @@ runwayml>=3.0.0
 openpyxl>=3.1.0
 pypdf>=4.0.0
 python-docx>=1.1.0
+# Discovery — fallback opzionale di rendering per siti che richiedono
+# JavaScript (domains/discovery.py::_fetch_con_rendering_js). Soft
+# dependency: import protetto da try/except, Discovery degrada al solo
+# fetch statico se assente. Dopo l'installazione del pacchetto, il browser
+# va scaricato separatamente con: python -m playwright install chromium
+playwright>=1.40.0

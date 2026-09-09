@@ -26,9 +26,15 @@ export default function Budget() {
   };
 
   const configured = isBudgetConfigured(b?.general_limit);
+  // Etichette dipendenti da b.mode (REALE/SIMULAZIONE/MISTA — vedi
+  // domains/budget.py::compute_spent): "Speso (sim)" era un'etichetta fissa
+  // anche quando la spesa era in realta' (in parte o del tutto) reale
+  // (es. costi di comprensione del brain, sempre reali quando > 0).
+  const speseLabel = b?.mode === "REALE" ? "Speso (reale)" : b?.mode === "MISTA" ? "Speso (misto)" : "Speso (sim)";
+  const panoramicaLabel = b?.mode === "REALE" ? "Panoramica (REALE)" : b?.mode === "MISTA" ? "Panoramica (MISTA)" : "Panoramica (SIMULAZIONE)";
   const chart = [
     { name: "Limite", value: b?.general_limit || 0 },
-    { name: "Speso (sim)", value: b?.spent_simulated || 0 },
+    { name: speseLabel, value: b?.spent_simulated || 0 },
     // Un "Residuo" negativo con limite non configurato (0) sarebbe fuorviante
     // (sembrerebbe uno sforamento): la barra si mostra solo a limite impostato.
     ...(configured ? [{ name: "Residuo", value: b?.residual || 0 }] : []),
@@ -40,7 +46,7 @@ export default function Budget() {
       <PageHeader title="Budget e costi" subtitle="Il budget generale non sostituisce il tetto specifico approvato di ogni preventivo." />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="p-5 lg:col-span-2">
-          <div className="label-caps mb-3">Panoramica (SIMULAZIONE)</div>
+          <div className="label-caps mb-3" data-testid="budget-panoramica-label">{panoramicaLabel}</div>
           <div style={{ width: "100%", height: 240, minHeight: 240 }}>
             <ResponsiveContainer width="100%" height="100%" minWidth={0}>
               <BarChart data={chart}>
@@ -69,7 +75,25 @@ export default function Budget() {
             </div>
             {isAdmin && <button data-testid="budget-save" onClick={save} className="w-full bg-primary text-primary-foreground rounded-sm px-4 py-2 text-sm hover:opacity-90 active:scale-[0.98] transition-colors duration-200">Salva budget</button>}
             <div className="pt-2 border-t border-border/60 space-y-1.5 text-sm">
-              <Row l="Speso (sim)" v={`$${(b?.spent_simulated || 0).toFixed(5)}`} />
+              <Row l={speseLabel} v={`$${(b?.spent_simulated || 0).toFixed(5)}`} />
+              {b?.spent_brain > 0 && (
+                <div data-testid="budget-spent-brain" className="text-xs text-muted-foreground flex justify-between">
+                  <span>di cui comprensione brain (prima di ogni piano)</span>
+                  <span className="font-mono">${(b.spent_brain).toFixed(5)}</span>
+                </div>
+              )}
+              {b?.spent_content_creator > 0 && (
+                <div data-testid="budget-spent-content-creator" className="text-xs text-muted-foreground flex justify-between">
+                  <span>di cui laboratorio Content Creator</span>
+                  <span className="font-mono">${(b.spent_content_creator).toFixed(5)}</span>
+                </div>
+              )}
+              {b?.spent_altri_reali > 0 && (
+                <div data-testid="budget-spent-altri-reali" className="text-xs text-muted-foreground flex justify-between">
+                  <span>di cui altre chiamate reali (es. revisione bozze)</span>
+                  <span className="font-mono">${(b.spent_altri_reali).toFixed(5)}</span>
+                </div>
+              )}
               <Row l="Residuo" v={formatBudgetLine(b?.general_limit, b?.residual)} />
             </div>
           </div>

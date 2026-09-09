@@ -254,8 +254,16 @@ async def startup():
 
     await content_creator_pipeline.recover_on_startup(db)
 
-    # Milestone 2 — recovery idempotente protetto da lock (leader election)
+    # Milestone 2 — recovery idempotente protetto da lock (leader election):
+    # riprende SOLO i task IN_ESECUZIONE interrotti da un riavvio, mai la
+    # coda storica IN_CODA (vedi m2/engine.py::_recover_m2_inner).
     await m2_engine.recover_m2(db)
+    # Avvio automatico dopo approvazione (persistente, indipendente dal
+    # browser): worker di poll di riserva, marcatore-only, mai retroattivo
+    # sui piani approvati prima di questa correzione (vedi
+    # m2/engine.py::auto_dispatch_worker_loop). Il trigger primario e'
+    # immediato, alla stessa /approve.
+    m2_engine.start_auto_dispatch_worker(db)
 
     # Social Media Manager — recovery + scheduler pubblicazioni (item 15/21: resiste a un riavvio del backend)
     await social_publishing.recover_on_startup()

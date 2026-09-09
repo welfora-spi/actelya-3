@@ -43,9 +43,22 @@ export default function SalaRiunioni() {
   const demoData = useMeetingRoomData(teamMode);
   const realPlan = useMeetingRoomDataFromPlan(planId, refetchToken);
 
-  const { objective, seats, activeAgentIds, deliverables, planStatus, estimate, tasksCount } = usingRealPlan
+  const { objective, seats, activeAgentIds, deliverables, planStatus, estimate, approvedCap, planMode, tasksCount } = usingRealPlan
     ? (realPlan.data || EMPTY_ROOM_DATA)
     : demoData;
+
+  // Aggiornamento periodico dello stato reale (task in coda/al lavoro/
+  // bloccato/completato ora possono avanzare da soli sul server dopo
+  // l'approvazione, non solo su un refresh manuale — vedi
+  // m2/engine.py::auto_dispatch_worker_loop). Si ferma su uno stato
+  // conclusivo o su un errore gia' segnalato: mai un polling su un piano
+  // che non tornera' piu' utilizzabile.
+  useEffect(() => {
+    if (!usingRealPlan || realPlan.error) return;
+    if (planStatus && ["COMPLETATO", "BLOCCATO", "ANNULLATO"].includes(planStatus)) return;
+    const t = setInterval(() => setRefetchToken((v) => v + 1), 3000);
+    return () => clearInterval(t);
+  }, [usingRealPlan, realPlan.error, planStatus]);
 
   const [selectedId, setSelectedId] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -67,6 +80,13 @@ export default function SalaRiunioni() {
     tasksCount: tasksCount ?? null,
     planStatus: usingRealPlan ? (planStatus ?? null) : null,
     estimatedCost: estimate?.cost_probable ?? null,
+    // Tetto REALMENTE autorizzato dal click "Approva" (plan.approved_cap):
+    // puo' differire dalla sola stima sopra (vedi adapter.js) — mostrato
+    // sempre distintamente, mai sostituito dalla stima.
+    approvedCap: approvedCap ?? null,
+    // Stessa modalità mostrata nel dettaglio piano (lib/planMode.js) — mai
+    // una seconda etichetta che puo' discordare per lo stesso piano.
+    planMode: usingRealPlan ? (planMode ?? null) : null,
   };
 
   const selectSeat = (seat) => {

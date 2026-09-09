@@ -4,6 +4,7 @@ import { PageHeader, Card, Empty } from "@/components/Primitives";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EmailPreview } from "@/pages/Executions";
 import MultimodalProjectPanel from "@/components/MultimodalProjectPanel";
+import { ContentItemDeliverablePreview } from "@/components/content-items/ContentItemDeliverablePreview";
 
 // Deliverable multimodale (video/immagine) prodotto da una skill REALE (vedi
 // brain/skills.py): renderizzato QUI, per intero (contenuto, verifica
@@ -100,7 +101,10 @@ function SocialContentPreview({ d }) {
   );
 }
 
-const CUSTOM_PREVIEW = { editorial_plan: EditorialPlanPreview, social_content: SocialContentPreview };
+const CUSTOM_PREVIEW = {
+  editorial_plan: EditorialPlanPreview, social_content: SocialContentPreview,
+  content_item: ContentItemDeliverablePreview,
+};
 
 // EmailPreview legge SOLO campi a forma di email (oggetto/contenuto_completo/
 // cta, vedi pages/Executions.jsx): usarlo per un tipo diverso produce una
@@ -148,12 +152,38 @@ function GenericDeliverablePreview({ d }) {
   );
 }
 
+// Riepilogo di sola lettura dello stato editoriale di ciascuna bozza di un
+// deliverable multi-item (es. social_content) — la decisione si registra in
+// Piani (dettaglio piano), qui serve solo a rendere lo stato visibile anche
+// da Risultati, cosi' le due pagine non mostrano mai informazioni diverse
+// sulla stessa bozza (vedi m2/deliverable_review.py).
+function ItemDecisionsSummary({ decisions }) {
+  if (!decisions?.length) return null;
+  return (
+    <div className="px-4 py-2.5 border-t border-border/60 space-y-1" data-testid="item-decisions-summary">
+      <div className="label-caps">Stato editoriale bozze</div>
+      {decisions.map((it) => (
+        <div key={it.item_index} className="flex items-center justify-between gap-2 text-xs"
+          data-testid={`item-decisions-summary-row-${it.item_index}`}>
+          <span className="text-muted-foreground">Bozza {it.item_index + 1} · v{it.current_version}</span>
+          <StatusBadge status={it.decision?.status || "IN_ATTESA_REVISIONE"} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function deliverablePreview(d) {
-  if (REAL_SKILL_PANEL_KIND[d.deliverable_type]) return <RealSkillDeliverableCard key={d.id} d={d} />;
-  const Custom = CUSTOM_PREVIEW[d.deliverable_type];
-  if (Custom) return <Custom key={d.id} d={d} />;
-  if (EMAIL_SHAPED_TYPES.has(d.deliverable_type)) return <EmailPreview key={d.id} d={d} />;
-  return <GenericDeliverablePreview key={d.id} d={d} />;
+  const corpo = REAL_SKILL_PANEL_KIND[d.deliverable_type] ? <RealSkillDeliverableCard d={d} />
+    : CUSTOM_PREVIEW[d.deliverable_type] ? (() => { const Custom = CUSTOM_PREVIEW[d.deliverable_type]; return <Custom d={d} />; })()
+    : EMAIL_SHAPED_TYPES.has(d.deliverable_type) ? <EmailPreview d={d} />
+    : <GenericDeliverablePreview d={d} />;
+  return (
+    <div key={d.id}>
+      {corpo}
+      <ItemDecisionsSummary decisions={d.item_decisions} />
+    </div>
+  );
 }
 
 export default function Deliverables() {

@@ -14,6 +14,7 @@
 //   grezzo, che è un id diverso, lato motore, non lato frontend).
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
+import { derivePlanMode } from "@/lib/planMode";
 import { AGENT_REGISTRY, COORDINATOR_AGENT, getAgentById } from "./agentRegistry";
 import {
   DEMO_OBJECTIVE, OWNER, COORDINATOR_DATA, OBJECTIVE_DATA_BY_AGENT,
@@ -396,6 +397,16 @@ export function useMeetingRoomDataFromPlan(planId, refetchToken = 0) {
             seats, activeAgentIds,
             deliverables: deliverablesFromSeats(seats),
             planId, planStatus: plan.plan_status, estimate: plan.estimate || null,
+            // Tetto REALMENTE autorizzabile con un click su "Approva": puo'
+            // divergere da estimate.approvable_cap quando un task e' stato
+            // aggiunto al piano dopo la stima iniziale (es. content_item
+            // reale, vedi brain/service.py) — approved_cap resta comunque la
+            // fonte di verita' per quanto budget il click autorizza davvero.
+            approvedCap: plan.approved_cap ?? null,
+            // Stessa derivazione di PlanDetail.jsx (lib/planMode.js): mai
+            // dedotta dalla sola impostazione ai_real_mode corrente
+            // dell'organizzazione, sempre dai task di QUESTO piano.
+            planMode: derivePlanMode(tasks).label,
             tasksCount: tasks.length, source: "api",
           },
         });

@@ -77,6 +77,12 @@ class NormalizedCeoPlan:
     rischi_valutati: list = field(default_factory=list)          # list[dict] (RiskDecision.__dict__)
     azione_rischio_aggregata: str = AZIONE_NONE
     domande_aggiuntive: list = field(default_factory=list)
+    # Dati proposti come "mancanti" dall'LLM ma NON indispensabili per
+    # avviare un piano utile (CAN_BE_RESEARCHED/USEFUL_BUT_OPTIONAL) o
+    # eccedenti MAX_DOMANDE_CHIARIMENTO: mai richiesti all'utente, mai
+    # inventati, dichiarati qui per trasparenza (fix P0 UX Clarification
+    # Engine, vedi classify_missing_data sopra).
+    dati_non_disponibili: list = field(default_factory=list)
     assunzioni: list = field(default_factory=list)
     approvazioni_necessarie: list = field(default_factory=list)
     strategia_proposta: str = ""
@@ -94,7 +100,8 @@ class NormalizedCeoPlan:
             "capability_extra_scartate": self.capability_extra_scartate,
             "task_proposti_validati": self.task_proposti_validati, "kpi": self.kpi,
             "rischi_valutati": self.rischi_valutati, "azione_rischio_aggregata": self.azione_rischio_aggregata,
-            "domande_aggiuntive": self.domande_aggiuntive, "assunzioni": self.assunzioni,
+            "domande_aggiuntive": self.domande_aggiuntive, "dati_non_disponibili": self.dati_non_disponibili,
+            "assunzioni": self.assunzioni,
             "approvazioni_necessarie": self.approvazioni_necessarie, "strategia_proposta": self.strategia_proposta,
             "confidence": self.confidence, "correzioni": [c.come_dict() for c in self.correzioni],
         }
@@ -109,6 +116,75 @@ def _dedup_semantico(candidate: list, gia_note: set) -> list:
         viste.add(norm)
         out.append(c)
     return out
+
+
+# ---- Clarification Engine (fix P0 UX): un LLM proponeva liberamente decine
+# di "dati_mancanti" (prezzi, competitor, ROAS, pixel, margini, target, pain
+# point, funnel, CRM, campagne precedenti, USP, testimonial, landing page...)
+# senza alcun vincolo di quantita' o di indispensabilita', trasformando ogni
+# NEEDS_CLARIFICATION in un form da 10-20 campi. Nessuno di questi dati e'
+# mai indispensabile per AVVIARE un piano utile (CAN_BE_RESEARCHED/
+# USEFUL_BUT_OPTIONAL nella tassonomia richiesta): solo cio' che resta dopo
+# questo filtro puo' generare una domanda, e comunque mai piu' di
+# MAX_DOMANDE_CHIARIMENTO per ciclo. Il principio anti-allucinazione non
+# cambia: un dato non disponibile non richiesto non viene MAI inventato, resta
+# dichiarato come tale (dati_non_disponibili) cosi' che il piano lo esponga
+# onestamente invece di fingere di saperlo.
+MAX_DOMANDE_CHIARIMENTO = 5
+
+_DATI_NON_INDISPENSABILI_KW = [
+    r"roas", r"pixel", r"competitor", r"concorrent", r"testimonial", r"landing",
+    r"margin", r"funnel", r"\bcrm\b", r"campagn\w*\s+precedent", r"storic", r"benchmark",
+    r"analytics", r"statistich", r"pain point", r"\busp\b", r"prezz", r"\btarget\b",
+    r"pubblico di riferimento", r"pubblico target", r"unique selling",
+]
+
+# Campo -> etichetta con cui service.py::create_plan_with_brain inietta il
+# valore gia' noto (Fact Ledger/Company Profile) nel goal_text PRIMA di
+# interpellare l'LLM (stessa sintassi "Etichetta: valore." usata anche da
+# context.py::augment_goal_text per le risposte di chiarimento): se
+# quell'etichetta e' gia' presente nel testo, il dato e' gia' dichiarato e
+# non va mai richiesto una seconda volta, qualunque cosa proponga il modello.
+_CAMPO_GIA_NOTO_KW = {
+    "settore": ["settore:"],
+    "sito web": ["sito web:"], "sito internet": ["sito web:"], "dominio": ["sito web:"],
+    "obiettivo aziendale": ["obiettivo aziendale:"], "obiettivo commerciale": ["obiettivo aziendale:"],
+    "nome dell'azienda": ["azienda/brand:"], "nome azienda": ["azienda/brand:"],
+    "ragione sociale": ["azienda/brand:"], "brand": ["azienda/brand:"],
+    "prodotto": ["prodotto/servizio:"], "servizio": ["prodotto/servizio:"],
+}
+
+
+def _campo_gia_dichiarato(item: str, goal_text: str) -> bool:
+    item_l = (item or "").lower()
+    testo_l = (goal_text or "").lower()
+    for chiave, etichette in _CAMPO_GIA_NOTO_KW.items():
+        if chiave in item_l and any(e in testo_l for e in etichette):
+            return True
+    return False
+
+
+def classify_missing_data(items: list, goal_text: str = "") -> tuple[list, list]:
+    """Separa i 'dati_mancanti' proposti dall'LLM in REQUIRED_TO_START (unici
+    che possono generare una domanda, sempre capped a
+    MAX_DOMANDE_CHIARIMENTO) e USEFUL_BUT_OPTIONAL/CAN_BE_RESEARCHED/gia'
+    dichiarati (mai una domanda: restano solo dichiarati come dati non
+    disponibili, senza bloccare il piano ne' inventare nulla)."""
+    richieste: list = []
+    non_disponibili: list = []
+    for item in items or []:
+        if not item or not str(item).strip():
+            continue
+        if _campo_gia_dichiarato(item, goal_text):
+            continue  # gia' noto: non va nemmeno dichiarato come mancante
+        if any(re.search(p, item.lower(), re.IGNORECASE) for p in _DATI_NON_INDISPENSABILI_KW):
+            non_disponibili.append(item)
+        else:
+            richieste.append(item)
+    if len(richieste) > MAX_DOMANDE_CHIARIMENTO:
+        non_disponibili.extend(richieste[MAX_DOMANDE_CHIARIMENTO:])
+        richieste = richieste[:MAX_DOMANDE_CHIARIMENTO]
+    return richieste, non_disponibili
 
 
 def validate_capabilities_against_registry(capabilities: list) -> tuple[list, list]:
@@ -227,7 +303,8 @@ def validate_and_normalize(
         budget_status = "RIDOTTO_PER_RISPETTARE_LIMITE"
         correzioni.append(Correzione("budget_ridotto", f"Le allocazioni proposte superavano il budget totale: ridotte proporzionalmente (fattore {fattore:.2f})."))
 
-    domande_aggiuntive = _dedup_semantico(proposta.dati_mancanti, chiarimenti_gia_dati)
+    richieste_chiarimento, dati_non_disponibili = classify_missing_data(proposta.dati_mancanti, goal_text)
+    domande_aggiuntive = _dedup_semantico(richieste_chiarimento, chiarimenti_gia_dati)
 
     return NormalizedCeoPlan(
         origine="LLM", provider_effettivo=provider_effettivo, modello_effettivo=modello_effettivo,
@@ -241,6 +318,7 @@ def validate_and_normalize(
         task_proposti_validati=task_validati, kpi=proposta.kpi,
         rischi_valutati=[{"categoria": d.categoria, "severita": d.severita, "azione": d.azione, "motivo": d.motivo} for d in rischi_valutati],
         azione_rischio_aggregata=azione_aggregata, domande_aggiuntive=domande_aggiuntive,
+        dati_non_disponibili=dati_non_disponibili,
         assunzioni=proposta.assunzioni, approvazioni_necessarie=proposta.approvazioni_necessarie,
         strategia_proposta=proposta.strategia_proposta, confidence=proposta.confidence,
         correzioni=correzioni,

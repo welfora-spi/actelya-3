@@ -76,18 +76,36 @@ async def _requesty_connection(db, org_id: str) -> Optional[dict]:
 
 async def create_content_item(db, *, org_id: str, actor: str, objective: str, channel: str, funnel_stage: str,
                               content_type: Optional[str], campaign_id: Optional[str], tone_override: Optional[str],
-                              constraints: str, brief: str) -> dict:
+                              constraints: str, brief: str, quantity: int = 1) -> dict:
     """Decide (decision.py) quale/i tipo/i di contenuto produrre e crea un
     content_item BOZZA per ciascuno — la decisione stessa è persistita
-    (motivazione_tipo), mai un'inferenza silenziosa e irripetibile."""
-    piano = decision.decide_content_plan(channel=channel, funnel_stage=funnel_stage, explicit_type=content_type)
+    (motivazione_tipo), mai un'inferenza silenziosa e irripetibile.
+
+    'quantity' (default 1, comportamento invariato per ogni chiamante
+    esistente): quanti content_item DISTINTI creare (una generazione reale
+    indipendente ciascuno — mai un solo item con N varianti interne spacciate
+    per N contenuti separati). Tutti gli item della stessa richiesta
+    condividono 'content_group_id'/'content_group_size', cosi' il chiamante
+    puo' verificare quanti sono stati davvero prodotti rispetto al
+    richiesto."""
+    piano = decision.decide_content_plan(
+        channel=channel, funnel_stage=funnel_stage, explicit_type=content_type, quantity=quantity)
+    group_id = new_id("contentgroup")
+    group_size = len(piano["content_types"])
     creati = []
-    for tipo in piano["content_types"]:
+    for indice, tipo in enumerate(piano["content_types"], start=1):
+        brief_effettivo = brief
+        if group_size > 1:
+            brief_effettivo = (
+                f"{brief}\n\n(Questo e' il contenuto {indice} di {group_size} richiesti: deve essere "
+                "chiaramente distinto dagli altri per angolo/apertura/esempio, non una riformulazione minima.)"
+            )
         rec = {
             "id": new_id("content"), "organization_id": org_id, "content_type": tipo,
             "objective": objective, "channel": channel, "funnel_stage": funnel_stage,
             "campaign_id": campaign_id, "tone_override": tone_override, "constraints": constraints,
-            "brief": brief, "motivazione_tipo": piano["motivazione"], "tono_suggerito": piano["tono_suggerito"],
+            "brief": brief_effettivo, "motivazione_tipo": piano["motivazione"], "tono_suggerito": piano["tono_suggerito"],
+            "content_group_id": group_id, "content_group_size": group_size, "content_group_index": indice,
             "status": "BOZZA", "content": None, "generazione": {}, "nota_revisione": None,
             "semantic_check": {"status": "NON_VERIFICATO", "affermazioni_contestate": []},
             "approved": False, "approved_by": None, "approved_at": None,
@@ -98,7 +116,8 @@ async def create_content_item(db, *, org_id: str, actor: str, objective: str, ch
         await db.content_items.insert_one(rec)
         rec.pop("_id", None)
         creati.append(rec)
-    return {"content_types_decisi": piano["content_types"], "motivazione": piano["motivazione"], "items": creati}
+    return {"content_types_decisi": piano["content_types"], "motivazione": piano["motivazione"], "items": creati,
+            "content_group_id": group_id, "content_group_size": group_size}
 
 
 async def generate_content_item(db, item: dict, *, actor: str, user: Optional[dict] = None) -> dict:

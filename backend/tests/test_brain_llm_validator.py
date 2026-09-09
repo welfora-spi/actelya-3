@@ -6,7 +6,12 @@ Budget: assente ma indispensabile -> chiarimento; valori in disaccordo ->
 chiarimento; allocazioni oltre il totale -> normalizzate/ridotte, mai un
 blocco silenzioso. Rischi: normalizzati e aggregati, mai applicati qui."""
 from app.brain.llm_schema import CeoLLMProposal
-from app.brain.llm_validator import estrai_budget_deterministico, validate_and_normalize
+from app.brain.llm_validator import (
+    MAX_DOMANDE_CHIARIMENTO,
+    classify_missing_data,
+    estrai_budget_deterministico,
+    validate_and_normalize,
+)
 from app.brain.risk_registry import AZIONE_APPROVAL, AZIONE_BLOCK, AZIONE_NONE
 
 
@@ -198,3 +203,55 @@ def test_metadati_provider_propagati():
     assert p.origine == "LLM"
     assert p.provider_effettivo == "openai"
     assert p.modello_effettivo == "gpt-4o"
+
+
+# ==================== Fix P0 UX: Clarification Engine ====================
+# classify_missing_data separa i dati 'mancanti' proposti da un LLM in
+# REQUIRED_TO_START (possono generare una domanda) e USEFUL_BUT_OPTIONAL/
+# CAN_BE_RESEARCHED/gia' dichiarati (mai una domanda, solo dichiarati come
+# dati non disponibili — mai bloccanti, mai inventati).
+def test_classify_missing_data_filtra_dati_ricercabili_o_opzionali():
+    richieste, non_disponibili = classify_missing_data([
+        "ROAS delle campagne precedenti", "Pixel installato", "Competitor principali",
+        "Margini sul prodotto", "Testimonial dei clienti", "Storico delle campagne",
+        "Target di riferimento", "Nome del referente commerciale",
+    ])
+    assert richieste == ["Nome del referente commerciale"]
+    assert len(non_disponibili) == 7
+
+
+def test_classify_missing_data_cap_a_max_domande_chiarimento():
+    items = [f"dato numero {i}" for i in range(8)]
+    richieste, non_disponibili = classify_missing_data(items)
+    assert len(richieste) == MAX_DOMANDE_CHIARIMENTO
+    assert len(non_disponibili) == 3
+    assert richieste == items[:MAX_DOMANDE_CHIARIMENTO]
+    assert non_disponibili == items[MAX_DOMANDE_CHIARIMENTO:]
+
+
+def test_classify_missing_data_ignora_campi_gia_dichiarati_nel_testo():
+    goal_text = "Vendi di piu'. Settore: servizi informatici. Sito web: https://www.spitool.it/."
+    richieste, non_disponibili = classify_missing_data(
+        ["Qual e' il settore dell'azienda?", "Qual e' il sito web?", "Qual e' il budget disponibile?"],
+        goal_text=goal_text,
+    )
+    assert richieste == ["Qual e' il budget disponibile?"]
+    assert non_disponibili == []  # gia' note: non vanno nemmeno dichiarate come mancanti
+
+
+def test_classify_missing_data_lista_vuota_non_genera_nulla():
+    richieste, non_disponibili = classify_missing_data([])
+    assert richieste == []
+    assert non_disponibili == []
+
+
+def test_dati_mancanti_alluvione_produce_domande_capped_e_dati_non_disponibili():
+    proposta = CeoLLMProposal(intent="x", strategia_proposta="y", dati_mancanti=[
+        "ROAS storico", "Pixel di Meta", "Competitor diretti", "prezzo di listino",
+        "Budget mensile", "Nome del referente",
+    ])
+    p = validate_and_normalize(proposta, goal_text="", detected_intents=["social"])
+    assert p.domande_aggiuntive == ["Budget mensile", "Nome del referente"]
+    assert len(p.dati_non_disponibili) == 4
+    d = p.come_dict()
+    assert d["dati_non_disponibili"] == p.dati_non_disponibili

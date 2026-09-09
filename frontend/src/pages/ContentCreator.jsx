@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { PageHeader, Card, Empty } from "@/components/Primitives";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Plus, Sparkles, CheckCircle2, XCircle, RefreshCw, Link as LinkIcon } from "lucide-react";
+import { ContentItemBody, ContentItemStatusNotices } from "@/components/content-items/ContentItemBody";
 
 const EMPTY_PAGE = { items: [], total: 0, page: 1, page_size: 10, pages: 0 };
 const CONTENT_TYPES = [
@@ -35,9 +37,11 @@ export default function ContentCreator() {
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [deepLinkError, setDeepLinkError] = useState(null);
   const { hasRole } = useAuth();
   const canApprove = hasRole("ADMIN") || hasRole("APPROVATORE");
   const canGenerate = hasRole("ADMIN");
+  const [searchParams] = useSearchParams();
 
   const loadItems = useCallback((page = 1) => {
     api.get("/content-creator/items", { params: { page, page_size: 10 } })
@@ -45,6 +49,20 @@ export default function ContentCreator() {
   }, []);
 
   useEffect(() => { loadItems(); }, [loadItems]);
+
+  // Collegamento diretto da Risultati/dettaglio piano (?item=<id>): apre
+  // subito il contenuto corretto, in sola lettura — nessuna azione avviata
+  // automaticamente. Un id inesistente o non raggiungibile mostra un
+  // avviso esplicito, mai una scheda vuota.
+  useEffect(() => {
+    const itemId = searchParams.get("item");
+    if (!itemId) return;
+    setDeepLinkError(null);
+    api.get(`/content-creator/items/${itemId}`)
+      .then((r) => setSelected(r.data))
+      .catch(() => setDeepLinkError(itemId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams.get("item")]);
 
   const refreshSelected = async (id) => {
     const { data } = await api.get(`/content-creator/items/${id}`);
@@ -162,6 +180,12 @@ export default function ContentCreator() {
         </div>
 
         <div>
+          {deepLinkError && !selected && (
+            <div className="mb-3 text-xs rounded-sm border border-red-500/30 bg-red-500/10 text-red-400 px-3 py-2"
+              data-testid="content-item-deep-link-error">
+              Contenuto {deepLinkError} non disponibile: potrebbe essere stato rimosso o non è raggiungibile.
+            </div>
+          )}
           {!selected ? <Empty text="Seleziona o crea una richiesta di contenuto." /> : (
             <Card className="p-5">
               <div className="flex items-center justify-between flex-wrap gap-3 mb-2">
@@ -218,35 +242,8 @@ export default function ContentCreator() {
                 )}
               </div>
 
-              {selected.generazione?.errori_validazione?.length > 0 && (
-                <div className="mb-4 text-xs rounded-sm border border-red-500/30 bg-red-500/10 text-red-400 px-3 py-2">
-                  {selected.generazione.errori_validazione.join(" · ")}
-                </div>
-              )}
-              {selected.semantic_check?.status === "CONTESTATO" && (
-                <div className="mb-4 text-xs rounded-sm border border-amber-500/30 bg-amber-500/10 text-amber-400 px-3 py-2">
-                  Affermazioni non riconducibili al Fact Ledger: {selected.semantic_check.affermazioni_contestate.map((a) => a.frase).join(" · ")}
-                </div>
-              )}
-
-              {selected.content && (
-                <div className="space-y-3 text-sm" data-testid="content-item-body">
-                  {selected.content.titolo && <div><div className="label-caps mb-1">Titolo</div>{selected.content.titolo}</div>}
-                  {selected.content.corpo && <div><div className="label-caps mb-1">Corpo</div><p className="whitespace-pre-wrap">{selected.content.corpo}</p></div>}
-                  {selected.content.cta && <div><div className="label-caps mb-1">CTA</div>{selected.content.cta}</div>}
-                  {selected.content.hashtags?.length > 0 && (
-                    <div><div className="label-caps mb-1">Hashtag</div>{selected.content.hashtags.join(" ")}</div>
-                  )}
-                  {selected.content.varianti?.length > 0 && (
-                    <div>
-                      <div className="label-caps mb-1">Varianti</div>
-                      <ul className="list-disc list-inside space-y-1">
-                        {selected.content.varianti.map((v, i) => <li key={i}>{v}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
+              <ContentItemStatusNotices item={selected} />
+              {selected.content && <ContentItemBody content={selected.content} />}
             </Card>
           )}
         </div>

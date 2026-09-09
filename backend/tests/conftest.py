@@ -75,3 +75,46 @@ def register_tenant(company_name: str, *, password: str, sector: str = "Servizi"
         ultima_risposta = r.text
         time.sleep(2 * (tentativo + 1))  # backoff crescente: 2s, 4s, 6s, 8s, 10s
     raise AssertionError(f"Registrazione tenant fallita: rate limit non liberato dopo i tentativi previsti ({ultima_risposta}).")
+
+
+# ==================== Guardia: nessuna scrittura sul database reale dai test ====================
+# app/audit.py importa un client Mongo GLOBALE ('from .db import db', legato
+# a MONGO_URL/DB_NAME di backend/.env — oggi actelya3_dev, il database
+# applicativo reale preservato), usato da tools/gateway.py::authorize/
+# record_execution per ogni chiamata reale autorizzata da un agente. Un test
+# Python che raggiunge quel percorso (es. content_creator/pipeline.py::
+# generate_content_item) SENZA sostituire esplicitamente quella dipendenza
+# scrive in silenzio nel database reale — accaduto davvero in questa
+# sessione (9 record di audit rimossi a mano dopo la scoperta). Verificati
+# tutti gli altri riferimenti globali raggiungibili dai test M2/Content
+# Creator (tools/gateway.py, tools/cost_ledger.py, m2/engine.py::_audit,
+# real_content_creator.py): ricevono tutti 'db' come parametro esplicito,
+# nessun altro import globale in quei percorsi — solo app/audit.py::db resta
+# esposto. Questa guardia lo rende impossibile per costruzione, non solo per
+# disciplina di chi scrive il test: di default (autouse) 'app.audit.db' e'
+# sostituito con una sentinella che fa fallire SUBITO qualunque accesso
+# (prima di ogni scrittura reale) con un errore esplicito; un test che ha
+# davvero bisogno di quel percorso deve ri-sostituirlo con il proprio
+# database di test isolato via monkeypatch, dopo che questa fixture ha gia'
+# girato (l'ordine di pytest applica prima gli autouse, poi il corpo del
+# test puo' sovrascrivere).
+import pytest  # noqa: E402  (import in fondo al file: le utility sopra restano invariate)
+from app import audit as _audit_module
+
+
+class _RealDatabaseForbidden:
+    """Qualunque accesso (attributo o collezione) solleva subito un errore
+    chiaro — mai una scrittura silenziosa sul database applicativo reale da
+    un test che ha dimenticato di sostituire una dipendenza globale."""
+
+    def __getattr__(self, name):
+        raise RuntimeError(
+            "Database applicativo reale raggiunto da un test senza una sostituzione esplicita "
+            f"(attributo/collezione '{name}'). Usa monkeypatch.setattr(<modulo>, 'db', <db_di_test_isolato>) "
+            "prima di eseguire un percorso che lo attraversa (vedi backend/tests/conftest.py)."
+        )
+
+
+@pytest.fixture(autouse=True)
+def _forbid_real_database_in_tests(monkeypatch):
+    monkeypatch.setattr(_audit_module, "db", _RealDatabaseForbidden())

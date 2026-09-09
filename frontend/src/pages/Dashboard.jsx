@@ -57,7 +57,8 @@ export default function Dashboard() {
           sub={Object.entries(d.executions_by_status || {}).map(([k, v]) => `${k}:${v}`).join("  ")} />
         <Kpi label="Deliverable validi" value={d.valid_deliverables ?? 0} icon={FileText} tone="text-emerald-400"
           sub={`${d.blocked_deliverables ?? 0} bloccati`} />
-        <Kpi label="Approvazioni pendenti" value={d.pending_approvals ?? 0} icon={CheckSquare} tone="text-violet-400" />
+        <Kpi label="Approvazioni pendenti" value={d.pending_approvals ?? 0} icon={CheckSquare} tone="text-violet-400"
+          sub={`${d.pending_plans ?? 0} piani da autorizzare · ${d.pending_content_items ?? 0} bozze da revisionare${d.pending_deliverable_items ? ` · ${d.pending_deliverable_items} post social da revisionare` : ""}${d.pending_approvals_legacy ? ` · ${d.pending_approvals_legacy} altre` : ""}`} />
         <Kpi label="Costo totale" value={`$${(d.total_cost_simulated ?? 0).toFixed(4)}`} icon={Wallet}
           sub={formatBudgetLine(d.budget_limit, d.budget_residual)} />
       </div>

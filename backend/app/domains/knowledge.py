@@ -30,15 +30,25 @@ def _public(f: dict) -> dict:
         "id": f["id"], "field": f["field"], "value": f["value"], "source": f["source"],
         "method": f["method"], "confidence": f.get("confidence", 0.0), "state": f.get("state", "ATTIVO"),
         "confirms": f.get("confirms", []), "conflicts_with": f.get("conflicts_with", []),
+        "evidence": f.get("evidence", []),
         "detected_at": f.get("detected_at"), "expires_at": f.get("expires_at"),
         "created_at": f.get("created_at"), "updated_at": f.get("updated_at"),
     }
 
 
 async def write_fact(db, *, org_id: str, user_id: str, field: str, value: str, source: str,
-                     method: str, confidence: float = 0.6, expires_at: Optional[str] = None) -> Optional[dict]:
+                     method: str, confidence: float = 0.6, expires_at: Optional[str] = None,
+                     evidence: Optional[dict] = None) -> Optional[dict]:
     """Reconciles a new fact against the org's active facts for the same field.
-    Returns the fact that ended up authoritative for this write (or None if value empty)."""
+    Returns the fact that ended up authoritative for this write (or None if value empty).
+
+    evidence (opzionale): {"url", "acquisito_il", "estratto"} — provenienza
+    puntuale per un fatto ESTRATTO da una lettura reale (Discovery). Non
+    sostituisce 'source' (usato per la deduplicazione/rinforzo, tipicamente
+    un dominio) ne' 'confirms': si accumula in una lista 'evidence', una
+    voce per ogni fonte DISTINTA che ha davvero contribuito, cosi' un fatto
+    mantiene sempre la tracciabilita' di URL esatto/data/estratto testuale
+    di ogni conferma reale che ha ricevuto."""
     value = (value or "").strip()
     if not value or method not in METHOD_PRIORITY:
         return None
@@ -48,12 +58,23 @@ async def write_fact(db, *, org_id: str, user_id: str, field: str, value: str, s
     matching = [f for f in active if f["value"].strip().lower() == value.lower()]
     if matching:
         best = max(matching, key=lambda f: f.get("confidence", 0.0))
+        if source in (best.get("confirms") or []):
+            # La STESSA fonte che aveva gia' confermato questo valore lo
+            # rilegge identico (es. Discovery rieseguita sullo stesso sito,
+            # o la stima euristica deterministica che sceglie sempre la
+            # stessa risposta per lo stesso dominio): non e' nuova evidenza
+            # indipendente, quindi l'affidabilita' non sale. Nessuna
+            # scrittura: il fatto resta esattamente come prima (stessa
+            # confidence, stesso updated_at, nessuna voce duplicata in
+            # confirms/evidence). Una fonte DIVERSA che confermi lo stesso
+            # valore continua invece a incrementare la confidenza sotto.
+            return best
         new_conf = min(1.0, best.get("confidence", 0.0) + 0.15)
-        await db.facts.update_one(
-            {"id": best["id"]},
-            {"$set": {"confidence": new_conf, "updated_at": now, "updated_by": user_id},
-             "$addToSet": {"confirms": source}},
-        )
+        update = {"$set": {"confidence": new_conf, "updated_at": now, "updated_by": user_id},
+                 "$addToSet": {"confirms": source}}
+        if evidence:
+            update["$push"] = {"evidence": {**evidence, "source": source}}
+        await db.facts.update_one({"id": best["id"]}, update)
         best["confidence"] = new_conf
         return best
 
@@ -61,7 +82,15 @@ async def write_fact(db, *, org_id: str, user_id: str, field: str, value: str, s
     new_rec.update({
         "id": new_id("fact"), "field": field, "value": value, "source": source,
         "method": method, "confidence": confidence, "state": "ATTIVO",
-        "detected_at": now, "expires_at": expires_at, "confirms": [], "conflicts_with": [],
+        # 'confirms' parte GIA' con la fonte che ha originato il fatto (non
+        # vuoto): la fonte che lo ha appena scritto lo ha per definizione
+        # gia' "confermato" una volta — senza questo, la primissima
+        # rilettura identica dalla STESSA fonte (es. Discovery rieseguita
+        # sullo stesso sito) risulterebbe erroneamente una "nuova" fonte
+        # (source in [] e' sempre False) e alzerebbe comunque l'affidabilita'
+        # al secondo giro, vanificando il controllo sopra.
+        "detected_at": now, "expires_at": expires_at, "confirms": [source], "conflicts_with": [],
+        "evidence": [{**evidence, "source": source}] if evidence else [],
     })
 
     if not active:

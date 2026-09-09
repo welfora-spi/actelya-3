@@ -6,6 +6,8 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { ArrowLeft, ShieldCheck, ScanSearch, Presentation } from "lucide-react";
+import { ContentItemDeliverableItemsList } from "@/components/content-items/ContentItemDeliverablePreview";
+import { derivePlanMode } from "@/lib/planMode";
 
 // Stati espliciti del caricamento: mai un "Caricamento..." indefinito e mai
 // un polling che continua a interrogare una risorsa che non tornerà mai
@@ -28,6 +30,197 @@ const TERMINAL_VIEWS = [VIEW.UNAUTHENTICATED, VIEW.FORBIDDEN, VIEW.NOT_FOUND, VI
 // TRANSIENT_ERROR, per costruzione in load(), scatta SOLO quando non è
 // mai stato caricato nulla, quindi non compare mai qui.
 const STALE_NOTICE_VIEWS = [VIEW.UNAUTHENTICATED, VIEW.FORBIDDEN, VIEW.NOT_FOUND, VIEW.FATAL_ERROR];
+
+// deliverable_type -> campo array delle bozze indipendenti da decidere una a
+// una (backend: m2/deliverable_review.py::MULTI_ITEM_FIELD, stessa mappa).
+// Solo social_content oggi: editorial_plan e' un unico documento strategico
+// interno, mai bozze distinte da approvare singolarmente.
+const MULTI_ITEM_ARRAY_FIELD = { social_content: "posts" };
+
+// Stessa classificazione di backend/app/domains/budget.py::
+// _real_cost_per_execution_corretto: SOLO editorial_plan/social_content
+// approvati in modalità REALE vengono davvero riconciliati al costo VERO
+// (m2/engine.py::_apply_actual_cost_delta) dopo la chiamata al provider —
+// per qualunque altro task (compreso content_item, il cui costo vero vive
+// nel laboratorio Content Creator) "t.cost" resta solo la riserva stimata
+// iniziale, mai un importo davvero addebitato: mai etichettato "sostenuto".
+const TIPI_COSTO_RICONCILIATO = new Set(["editorial_plan", "social_content"]);
+const costoRealeRiconciliato = (t) => TIPI_COSTO_RICONCILIATO.has(t.deliverable_type) && t.approved_mode === "REALE";
+
+function PostCard({ content }) {
+  return (
+    <div className="text-xs text-muted-foreground space-y-0.5">
+      {content?.hook && <div className="text-foreground font-medium">{content.hook}</div>}
+      {content?.body && <div>{content.body}</div>}
+      {content?.cta && <div className="italic">{content.cta}</div>}
+      {content?.hashtags?.length > 0 && <div>{content.hashtags.join(" ")}</div>}
+    </div>
+  );
+}
+
+// Revisione editoriale UMANA sulle singole bozze di un deliverable
+// multi-bozza — distinta dalle "Revisioni" automatiche non distruttive
+// (compliance/auditor) mostrate subito sotto nello stesso pannello: qui si
+// registra una DECISIONE (Approva/Rifiuta/Richiedi modifica) sulla VERSIONE
+// corrente di ciascuna bozza, e — solo da una richiesta di modifica in
+// attesa — si può applicare esplicitamente la modifica (con stima di costo
+// e conferma PRIMA di ogni eventuale chiamata reale), producendo una nuova
+// versione IN_ATTESA_REVISIONE, mai approvata automaticamente. Le versioni
+// precedenti e le loro decisioni restano sempre consultabili nello storico.
+function MultiItemDecisionList({ d, planId, canDecide, onChanged }) {
+  const [busyIndex, setBusyIndex] = useState(null);
+  const [preview, setPreview] = useState({}); // { [index]: {cost_probable, cost_max} | "loading" }
+  const [openHistory, setOpenHistory] = useState({});
+  const campo = MULTI_ITEM_ARRAY_FIELD[d.deliverable_type];
+  const decisions = d.item_decisions || [];
+  if (!campo) return null;
+
+  const decide = async (index, decision, reason) => {
+    setBusyIndex(index);
+    try {
+      await api.post(`/m2/plans/${planId}/deliverables/${d.id}/items/${index}/decision`, { decision, reason });
+      toast.success("Decisione editoriale registrata.");
+      await onChanged();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setBusyIndex(null); }
+  };
+  const chiediMotivoEDecidi = (index, decision, etichetta) => {
+    const motivo = window.prompt(`Motivazione per "${etichetta}" (obbligatoria — una modifica editoriale concreta, non un pretesto):`);
+    if (!motivo || !motivo.trim()) return;
+    decide(index, decision, motivo.trim());
+  };
+
+  const mostraStimaModifica = async (index) => {
+    setPreview((s) => ({ ...s, [index]: "loading" }));
+    try {
+      const { data } = await api.get(`/m2/plans/${planId}/deliverables/${d.id}/items/${index}/edit-cost`);
+      setPreview((s) => ({ ...s, [index]: data }));
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+      setPreview((s) => { const n = { ...s }; delete n[index]; return n; });
+    }
+  };
+
+  const applicaModifica = async (index) => {
+    const stima = preview[index];
+    const testoStima = stima && stima !== "loading"
+      ? `Costo previsto: fino a $${stima.cost_max.toFixed(5)} (probabile $${stima.cost_probable.toFixed(5)}).`
+      : "Stima non disponibile.";
+    if (!window.confirm(`Applicare la modifica a questa bozza? ${testoStima}\n\nQuesta azione può comportare una chiamata reale a pagamento, entro il budget esistente.`)) {
+      return;
+    }
+    setBusyIndex(index);
+    try {
+      await api.post(`/m2/plans/${planId}/deliverables/${d.id}/items/${index}/apply-edit`, { confirm: true });
+      toast.success("Modifica applicata: nuova versione creata, in attesa di revisione.");
+      setPreview((s) => { const n = { ...s }; delete n[index]; return n; });
+      await onChanged();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setBusyIndex(null); }
+  };
+
+  return (
+    <div className="space-y-2" data-testid={`item-decisions-${d.deliverable_type}`}>
+      <div className="label-caps">Bozze e decisione editoriale ({decisions.length})</div>
+      {decisions.map((it) => {
+        const i = it.item_index;
+        const dec = it.decision || { status: "IN_ATTESA_REVISIONE" };
+        const decisa = dec.status !== "IN_ATTESA_REVISIONE";
+        const stima = preview[i];
+        return (
+          <div key={i} className="border border-border/60 rounded-sm p-2.5 space-y-1.5"
+            data-testid={`item-${d.deliverable_type}-${i}`}>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-xs font-medium">
+                Bozza {i + 1}{it.content?.channel ? ` · ${it.content.channel}` : ""}
+                {" "}<span className="text-muted-foreground font-mono text-[10px]" data-testid={`item-version-${d.deliverable_type}-${i}`}>v{it.current_version}</span>
+              </span>
+              <StatusBadge status={dec.status} testid={`item-status-${d.deliverable_type}-${i}`} />
+            </div>
+            <PostCard content={it.content} />
+            {dec.reason && (
+              <div className="text-[11px] text-amber-500" data-testid={`item-reason-${d.deliverable_type}-${i}`}>
+                Motivazione: {dec.reason}
+              </div>
+            )}
+            {dec.decided_by && (
+              <div className="text-[11px] text-muted-foreground">
+                Deciso da {dec.decided_by} il {dec.decided_at}
+              </div>
+            )}
+            {canDecide && !decisa && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                <button data-testid={`item-approve-${d.deliverable_type}-${i}`} disabled={busyIndex === i}
+                  onClick={() => decide(i, "APPROVATO", null)}
+                  className="text-xs bg-primary text-primary-foreground rounded-sm px-2.5 py-1 hover:opacity-90 disabled:opacity-50">
+                  Approva
+                </button>
+                <button data-testid={`item-reject-${d.deliverable_type}-${i}`} disabled={busyIndex === i}
+                  onClick={() => chiediMotivoEDecidi(i, "RIFIUTATO", "Rifiuta")}
+                  className="text-xs border border-red-500/40 text-red-400 rounded-sm px-2.5 py-1 hover:bg-red-500/10 disabled:opacity-50">
+                  Rifiuta
+                </button>
+                <button data-testid={`item-request-changes-${d.deliverable_type}-${i}`} disabled={busyIndex === i}
+                  onClick={() => chiediMotivoEDecidi(i, "MODIFICA_RICHIESTA", "Richiedi modifica")}
+                  className="text-xs border border-border rounded-sm px-2.5 py-1 hover:bg-muted/50 disabled:opacity-50">
+                  Richiedi modifica
+                </button>
+              </div>
+            )}
+            {canDecide && dec.status === "MODIFICA_RICHIESTA" && (
+              <div className="pt-1.5 border-t border-border/40 mt-1.5 space-y-1.5" data-testid={`item-edit-pending-${d.deliverable_type}-${i}`}>
+                <div className="text-[11px] text-amber-500">Lavoro ancora da svolgere: modifica richiesta, non ancora applicata.</div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {!stima && (
+                    <button data-testid={`item-preview-edit-${d.deliverable_type}-${i}`} onClick={() => mostraStimaModifica(i)}
+                      className="text-xs border border-border rounded-sm px-2.5 py-1 hover:bg-muted/50">
+                      Mostra costo previsto
+                    </button>
+                  )}
+                  {stima === "loading" && <span className="text-xs text-muted-foreground">Calcolo stima…</span>}
+                  {stima && stima !== "loading" && (
+                    <>
+                      <span className="text-[11px] font-mono text-muted-foreground" data-testid={`item-edit-cost-${d.deliverable_type}-${i}`}>
+                        fino a ${stima.cost_max.toFixed(5)}
+                      </span>
+                      <button data-testid={`item-apply-edit-${d.deliverable_type}-${i}`} disabled={busyIndex === i}
+                        onClick={() => applicaModifica(i)}
+                        className="text-xs bg-primary text-primary-foreground rounded-sm px-2.5 py-1 hover:opacity-90 disabled:opacity-50">
+                        Applica modifica (nuova versione)
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            {it.history?.length > 0 && (
+              <div className="pt-1">
+                <button className="text-[11px] text-muted-foreground hover:text-foreground"
+                  data-testid={`item-history-toggle-${d.deliverable_type}-${i}`}
+                  onClick={() => setOpenHistory((s) => ({ ...s, [i]: !s[i] }))}>
+                  {openHistory[i] ? "Nascondi" : "Mostra"} versioni precedenti ({it.history.length})
+                </button>
+                {openHistory[i] && (
+                  <div className="mt-1.5 space-y-1.5" data-testid={`item-history-${d.deliverable_type}-${i}`}>
+                    {it.history.map((h) => (
+                      <div key={h.version} className="border border-border/40 rounded-sm p-2 bg-muted/20">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="text-[11px] font-mono text-muted-foreground">v{h.version}{h.edit_note ? ` · modifica: ${h.edit_note}` : ""}</span>
+                          <StatusBadge status={h.decision?.status || "IN_ATTESA_REVISIONE"} />
+                        </div>
+                        <PostCard content={h.content} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function PlanDetail() {
   const { id } = useParams();
@@ -171,7 +364,15 @@ export default function PlanDetail() {
   const reviewsByDeliv = reviews.reduce((m, r) => { (m[r.deliverable_id] = m[r.deliverable_id] || []).push(r); return m; }, {});
   const notCompleted = plan.plan_status === "BLOCCATO";
   const realReady = !!mode?.real_ready;
-  const modeLabel = mode?.ai_real_mode ? "REALE" : "SIMULAZIONE";
+  // Modalità del PIANO (intestazione, preventivo, Sala Riunioni): derivata
+  // dai suoi task, mai dalla sola impostazione ai_real_mode corrente
+  // dell'organizzazione (vedi lib/planMode.js) — quest'ultima resta invece
+  // corretta per 'mode?.real_ready' sopra, che riguarda davvero
+  // l'organizzazione ORA (se il percorso reale e' disponibile per
+  // l'esecuzione), un concetto diverso dalla modalità con cui QUESTO piano
+  // e' stato configurato.
+  const planMode = derivePlanMode(tasks);
+  const modeLabel = planMode.label;
   const runLabel = realReady ? "Esegui (reale)" : "Esegui (simulazione)";
 
   return (
@@ -223,6 +424,52 @@ export default function PlanDetail() {
         </div>
       )}
 
+      {/* Preventivo visibile PRIMA dell'approvazione: nessuna esecuzione
+          esiste ancora a questo punto (il blocco 'execution' sotto compare
+          solo dopo), quindi e' l'UNICO punto dove l'utente puo' vedere
+          stima e tetto prima di autorizzare la spesa — stessi campi
+          (plan.estimate, plan.approved_cap) usati anche in Sala Riunioni
+          (vedi CollaboratorPanel.jsx), mai una seconda logica di calcolo. */}
+      {plan.plan_status === "IN_ATTESA_APPROVAZIONE" && (() => {
+        const stimaStorica = plan.estimate?.cost_probable ?? 0;
+        const tetto = plan.approved_cap ?? 0;
+        // Stima ricostruita dai task ATTUALI del piano (somma di
+        // task.inputs.cost, la stessa cifra riservata sul tetto per
+        // ciascuno — vedi PlanInsightsPanel/riga per-task sotto): MAI la
+        // stima storica del piano (plan.estimate), che puo' restare quella
+        // calcolata al momento della creazione anche se un task e' stato
+        // aggiunto dopo senza aggiornarla (vedi brain/service.py, blocco
+        // 'content'). Etichettata esplicitamente come ricostruzione, mai
+        // spacciata per la stima originale.
+        const stimaRicostruita = tasks.reduce((tot, t) => tot + (t.inputs?.cost ?? 0), 0);
+        const stimaStoricaNonAggiornata = Math.abs(stimaStorica - stimaRicostruita) > 1e-9;
+        return (
+          <Card className="p-4 mb-4" data-testid="plan-preventivo">
+            <div className="label-caps mb-2">Preventivo</div>
+            <div className="flex items-center gap-6 flex-wrap text-sm">
+              <span>Stima storica del piano <span className="font-mono" data-testid="plan-estimate-probable">${stimaStorica.toFixed(5)}</span></span>
+              <span>Tetto che approvi <span className="font-mono" data-testid="plan-approved-cap">${tetto.toFixed(5)}</span></span>
+              <span className="text-xs text-muted-foreground">
+                margine {(plan.estimate?.safety_margin != null) ? `${Math.round(plan.estimate.safety_margin * 100)}%` : "n/d"} · {plan.estimate?.currency || "USD"} · modalità {modeLabel}
+              </span>
+            </div>
+            {stimaStoricaNonAggiornata && (
+              <div className="mt-2 text-xs text-amber-500" data-testid="plan-estimate-stale-notice">
+                La stima storica (${stimaStorica.toFixed(5)}) non è stata aggiornata quando un'attività è stata
+                collegata al piano dopo la stima iniziale — non riflette il costo reale previsto. Stima ricostruita
+                ora dai task attuali (somma di tutte le attività del piano): <span className="font-mono" data-testid="plan-estimate-reconstructed">${stimaRicostruita.toFixed(5)}</span>.
+              </div>
+            )}
+            {tetto === 0 && (
+              <div className="mt-2 text-xs text-amber-500" data-testid="plan-zero-cap-warning">
+                Tetto a $0.00000: il preventivo non prevede alcuna spesa reale. Se il piano include attività a
+                pagamento, verificare i singoli task sotto prima di approvare.
+              </div>
+            )}
+          </Card>
+        );
+      })()}
+
       {execution && (
         <Card className="p-4 mb-4">
           <div className="flex items-center gap-6 flex-wrap text-sm">
@@ -247,7 +494,12 @@ export default function PlanDetail() {
                     <StatusBadge status={t.task_status} testid={`task-status-${t.seq}`} />
                   </div>
                   <div className="text-[11px] text-muted-foreground font-mono mt-1">
-                    {t.deliverable_type} · agente {t.agent_id} · tent. {t.attempt} · ${(t.cost ?? 0).toFixed(5)}
+                    {t.deliverable_type} · agente {t.agent_id} · tent. {t.attempt}
+                    {t.inputs?.requested_quantity != null ? ` · quantità ${t.inputs.requested_quantity}` : ""}
+                    {" · stima "}
+                    <span data-testid={`task-cost-estimate-${t.seq}`}>${(t.inputs?.cost ?? 0).toFixed(5)}</span>
+                    {costoRealeRiconciliato(t) ? " · sostenuto " : " · impegnato (stima, non ancora una spesa reale addebitata) "}
+                    <span data-testid={`task-cost-sostenuto-${t.seq}`}>${(t.cost ?? 0).toFixed(5)}</span>
                     {t.depends_on?.length ? ` · dipende da #${t.depends_on.map((d) => seqById[d]).join(", #")}` : " · nessuna dipendenza"}
                   </div>
                   {t.rejected_reason && <div className="text-[11px] text-red-400 mt-1">Rifiutata: {t.rejected_reason}</div>}
@@ -311,9 +563,15 @@ export default function PlanDetail() {
                         {d.generation.stima_costo_usd != null ? ` · $${Number(d.generation.stima_costo_usd).toFixed(5)}` : ""}
                       </div>
                     )}
-                    <pre className="bg-background border border-border/60 rounded-sm p-3 text-[11px] overflow-auto max-h-72 whitespace-pre-wrap break-words">
-                      {JSON.stringify(d.content, null, 2)}
-                    </pre>
+                    {d.deliverable_type === "content_item" ? (
+                      <ContentItemDeliverableItemsList d={d} />
+                    ) : MULTI_ITEM_ARRAY_FIELD[d.deliverable_type] ? (
+                      <MultiItemDecisionList d={d} planId={id} canDecide={canApprove} onChanged={load} />
+                    ) : (
+                      <pre className="bg-background border border-border/60 rounded-sm p-3 text-[11px] overflow-auto max-h-72 whitespace-pre-wrap break-words">
+                        {JSON.stringify(d.content, null, 2)}
+                      </pre>
+                    )}
                     <div className="space-y-1.5" data-testid={`reviews-${d.deliverable_type}`}>
                       <div className="label-caps">Revisioni (non distruttive)</div>
                       {revs.length === 0 && <div className="text-xs text-muted-foreground">Nessuna revisione.</div>}

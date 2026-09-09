@@ -254,9 +254,31 @@ def validate_lead_gen_campaign(c):
                                      "Import, qualifica e approvazione dei prospect reali")
 
 
+_CONTENT_ITEM_STATI_REALI_PRONTI = ("IN_ATTESA_APPROVAZIONE", "APPROVATO", "IN_ATTESA_ASSET")
+
+
 def validate_content_item(c):
     if not isinstance(c, dict) or not c.get("content_item_ids"):
         return {"status": "BLOCCATO", "warnings": [], "errors": ["content_item_ids mancante: nessun contenuto collegato"]}
+    items = c.get("items")
+    # Contenuto REALE gia' generato (m2/real_content_creator.py, avvio
+    # automatico dopo approvazione DEL PIANO): quella approvazione autorizza
+    # solo la spesa di generazione, MAI la decisione editoriale — gli item
+    # restano IN_ATTESA_APPROVAZIONE (bozza pronta, non approvata) finche' un
+    # umano non agisce nel laboratorio Content Creator, contestati o no.
+    if isinstance(items, list) and items and all(
+        isinstance(i, dict) and i.get("status") in _CONTENT_ITEM_STATI_REALI_PRONTI and i.get("content")
+        for i in items
+    ):
+        warnings = ["Bozze reali generate: in attesa di approvazione editoriale umana nel laboratorio Content "
+                    "Creator (non approvate automaticamente)."]
+        if c.get("contested_ids"):
+            warnings.append(f"{len(c['contested_ids'])} contenuto/i con affermazioni contestate dalla verifica "
+                            "semantica: verificare prima di approvare.")
+        if any(i.get("status") == "IN_ATTESA_ASSET" for i in items):
+            warnings.append("Uno o più contenuti richiedono ancora un asset multimediale reale: completalo nel "
+                            "laboratorio Content Creator.")
+        return {"status": "COMPLETATO_CON_AVVISI", "warnings": warnings, "errors": []}
     return {
         "status": "COMPLETATO_CON_AVVISI",
         "warnings": ["Generazione e approvazione del contenuto reale gestite nel laboratorio Content Creator, "
@@ -451,11 +473,18 @@ def produce_deliverable(deliverable_type: str, task: dict, plan: dict, org_profi
 
 
 # ==================== VERSIONAMENTO ATOMICO (nessuna sovrascrittura) ====================
-async def create_deliverable_version(db, *, org_id, plan, task, content, validation, agent_id, actor="system"):
+async def create_deliverable_version(db, *, org_id, plan, task, content, validation, agent_id, actor="system",
+                                      mode="SIMULAZIONE", generation=None):
     """Crea una NUOVA versione del deliverable per (plan_id, task_id) senza sovrascrivere
     le precedenti. Concorrenza-safe grazie all'indice unico (plan_id, task_id, version):
     in caso di collisione ritenta con la versione successiva. Marca is_current in modo
-    esclusivo (indice unico partial su is_current per task)."""
+    esclusivo (indice unico partial su is_current per task).
+
+    mode/generation (opzionali, default SIMULAZIONE/None invariati per ogni chiamante
+    esistente): quando un chiamante (m2/engine.py, editorial_plan/social_content in
+    modalita' REALE) ha davvero interpellato un provider, passa mode="REALE" e la
+    provenienza reale (provider, modello, token, costo) in 'generation' — mai inventata
+    qui, mai dedotta: il chiamante e' l'unico che sa se la chiamata e' avvenuta."""
     plan_id, task_id = task["plan_id"], task["id"]
     for _ in range(8):
         latest = await db.deliverables.find(
@@ -472,7 +501,7 @@ async def create_deliverable_version(db, *, org_id, plan, task, content, validat
             "warnings": validation.get("warnings", []), "errors": validation.get("errors", []),
             "content": content, "created_by": actor, "updated_by": actor,
             "created_at": now_iso(), "updated_at": now_iso(), "change_history": [],
-            "mode": "SIMULAZIONE",
+            "mode": mode, "generation": generation,
         }
         try:
             await db.deliverables.insert_one(doc)

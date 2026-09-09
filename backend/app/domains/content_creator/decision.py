@@ -32,30 +32,43 @@ FUNNEL_TONE_HINT: dict[str, str] = {
 }
 
 
-def decide_content_plan(*, channel: str, funnel_stage: str, explicit_type: Optional[str]) -> dict:
+def decide_content_plan(*, channel: str, funnel_stage: str, explicit_type: Optional[str], quantity: int = 1) -> dict:
     """Ritorna {'content_types': [...], 'motivazione': str, 'tono_suggerito': str}.
     Un tipo esplicitamente richiesto dall'utente vince sempre sul mapping
     canale->tipo: l'agente decide da solo SOLO quando non gli viene detto
-    cosa produrre — mai un'invenzione quando l'istruzione e' gia' chiara."""
+    cosa produrre — mai un'invenzione quando l'istruzione e' gia' chiara.
+
+    'quantity' (default 1, quindi comportamento invariato per ogni chiamante
+    esistente): il numero TOTALE di content_item DISTINTI da produrre — MAI
+    'numero di tipi decisi x quantity'. Se il canale ammette piu' tipi (es.
+    tiktok -> reel_script/storyboard/voiceover_script), i tipi vengono
+    ciclati fino a raggiungere ESATTAMENTE 'quantity' elementi totali, non
+    moltiplicati: quantity=2 su un canale a 3 tipi da' 2 content_item (i
+    primi due tipi del ciclo), mai 6."""
     canale = (channel or "generico").strip().lower()
     fase = (funnel_stage or "MOFU").strip().upper()
     tono = FUNNEL_TONE_HINT.get(fase, FUNNEL_TONE_HINT["MOFU"])
+    quantity = max(1, int(quantity or 1))
 
     if explicit_type:
         if explicit_type not in CONTENT_TYPES:
             raise ValueError(f"Tipo di contenuto sconosciuto: '{explicit_type}'.")
         return {
-            "content_types": [explicit_type],
-            "motivazione": f"Tipo di contenuto richiesto esplicitamente: '{explicit_type}'.",
+            "content_types": [explicit_type] * quantity,
+            "motivazione": f"Tipo di contenuto richiesto esplicitamente: '{explicit_type}'"
+                          + (f" (x{quantity})." if quantity > 1 else "."),
             "tono_suggerito": tono,
         }
 
     tipi = CHANNEL_CONTENT_TYPES.get(canale, CHANNEL_CONTENT_TYPES["generico"])
+    content_types = [tipi[i % len(tipi)] for i in range(quantity)]
     return {
-        "content_types": list(tipi),
+        "content_types": content_types,
         "motivazione": (
             f"Nessun tipo di contenuto specificato: selezionato/i in base al canale '{canale}' "
             f"nella fase di funnel '{fase}' (mapping canale->formato)."
+            + (f" {quantity} contenuti totali richiesti, tipi ciclati su {len(tipi)} disponibili per il canale."
+               if quantity > 1 else "")
         ),
         "tono_suggerito": tono,
     }

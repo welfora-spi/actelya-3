@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import { Users, BarChart3, CheckSquare, Presentation, ArrowLeft, Sparkles } from "lucide-react";
 import { useSystem } from "@/context/SystemContext";
@@ -15,7 +16,16 @@ const NAV = [
 ];
 
 export default function RoomShell({ children }) {
-  const { mode } = useSystem();
+  const { mode, refresh } = useSystem();
+
+  // Layout.jsx (usato da ogni altra pagina) e' l'UNICO altro punto che
+  // chiama refresh() al mount: RoomShell e' una chrome alternativa che non
+  // passa mai da li'. Senza questo effetto, chi arriva direttamente in
+  // Sala Riunioni (link diretto, refresh, nuova scheda) vede sempre lo
+  // stato di default di SystemContext (settings=null -> "SIMULAZIONE"),
+  // indipendentemente dalla modalità reale davvero attiva per
+  // l'organizzazione — non un'etichetta sbagliata, un dato mai caricato.
+  useEffect(() => { refresh(); }, [refresh]);
 
   return (
     <div className="dark min-h-screen lg:h-screen lg:overflow-hidden bg-background text-foreground flex" translate="no">

@@ -1,8 +1,12 @@
 // Riepilogo leggibile del piano normalizzato (priorita'/urgenza/budget/
-// scadenza/pubblico/canali/rischi/KPI/approvazioni/assunzioni), MAI JSON
-// grezzo (item 14, CEO Agent 100% reale). normalizedPlan e' sempre
-// presente quando result.status === "READY" (origine "LLM" o
-// "DETERMINISTICO", entrambi hanno la stessa forma).
+// scadenza/pubblico/canali/rischi/KPI/approvazioni/assunzioni/dati non
+// disponibili), MAI JSON grezzo (item 14, CEO Agent 100% reale).
+// normalizedPlan e' sempre presente quando result.status === "READY"
+// (origine "LLM" o "DETERMINISTICO", entrambi hanno la stessa forma).
+// dati_non_disponibili (fix P0 UX Clarification Engine): dati che l'utente
+// non ha mai richiesto di inventare — mai richiesti come domanda perche'
+// non indispensabili per iniziare, dichiarati qui per trasparenza invece di
+// sparire silenziosamente o essere inventati.
 const LIVELLO_COLORE = {
   ALTA: "text-red-400 border-red-500/30 bg-red-500/10",
   MEDIA: "text-amber-400 border-amber-500/30 bg-amber-500/10",
@@ -106,6 +110,14 @@ export default function PlanInsightsPanel({ normalizedPlan }) {
         <Sezione titolo="Assunzioni">
           <ul className="text-xs text-muted-foreground list-disc list-inside">
             {p.assunzioni.map((a, i) => <li key={i}>{a}</li>)}
+          </ul>
+        </Sezione>
+      )}
+
+      {p.dati_non_disponibili?.length > 0 && (
+        <Sezione titolo="Dati non disponibili (non indispensabili per iniziare)">
+          <ul className="text-xs text-muted-foreground list-disc list-inside" data-testid="dati-non-disponibili">
+            {p.dati_non_disponibili.map((d, i) => <li key={i}>{d}</li>)}
           </ul>
         </Sezione>
       )}

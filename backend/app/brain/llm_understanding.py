@@ -21,6 +21,17 @@ from typing import Optional
 from . import llm_gateway
 from .llm_context_builder import BrainLLMContext, build_context
 from .llm_schema import CeoLLMProposal, PropostaNonValida, SCHEMA_NOME, json_schema_per_provider
+from ..domains.estimator import PRICE_PER_TOKEN
+from ..domains import pricing
+from ..tools import gateway as tool_gateway
+from ..tools import cost_ledger
+
+# Agente titolare, nel Professional Tool Registry, di ogni chiamata reale di
+# comprensione del brain (vedi tools/registry.py: nota "Gateway principale
+# del CEO Agent: comprensione/proposta piano" su requesty_llm) — mai
+# "content-creator" o un altro agente M2, che sono chiamanti diversi dello
+# stesso strumento con la propria contabilizzazione gia' corretta.
+_AGENTE_COMPRENSIONE = "coordinatore-actelya"
 
 logger = logging.getLogger("actelya.brain.llm_understanding")
 
@@ -69,10 +80,16 @@ class TentativoProvider:
     codice_errore: Optional[str] = None
     messaggio: Optional[str] = None
     latenza_ms: Optional[int] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    stima_costo_usd: Optional[float] = None  # None = nessuna chiamata reale avvenuta (mai 0.0 come sinonimo di "gratis")
+    prezzo_noto: Optional[bool] = None  # True = prezzo reale per provider/modello (pricing.py); False = stima blended generica
 
     def come_dict(self) -> dict:
         return {"provider": self.provider, "model": self.model, "esito": self.esito,
-                "codice_errore": self.codice_errore, "messaggio": self.messaggio, "latenza_ms": self.latenza_ms}
+                "codice_errore": self.codice_errore, "messaggio": self.messaggio, "latenza_ms": self.latenza_ms,
+                "input_tokens": self.input_tokens, "output_tokens": self.output_tokens,
+                "stima_costo_usd": self.stima_costo_usd, "prezzo_noto": self.prezzo_noto}
 
 
 @dataclass
@@ -156,6 +173,22 @@ async def _prova_provider(db, org_id: str, ref: ProviderModelRef, contesto: Brai
     if adapter is None:
         return None, TentativoProvider(provider=ref.provider_type, model=ref.model, esito="ERRORE",
                                         codice_errore="provider_sconosciuto", messaggio="Nessun adapter per questo provider_type.")
+    tool_id = f"{ref.provider_type}_llm"
+
+    # Riserva PREVENTIVA (atomica, protetta dalla concorrenza — vedi
+    # tools/cost_ledger.py::reserve_budget) PRIMA di qualunque chiamata
+    # reale: stima pessimistica sul tetto massimo di token della
+    # connessione (input+output), mai la cifra vera (nota solo dopo). Se il
+    # tetto giornaliero configurato non basta, ZERO chiamate al provider —
+    # nessuna eccezione, un esito esplicito che il chiamante puo' mostrare.
+    stima_preflight = round(2 * ref.max_tokens * PRICE_PER_TOKEN, 6)
+    riservato, motivo_budget = await cost_ledger.reserve_budget(
+        db, org_id=org_id, tool_id=tool_id, estimated_cost=stima_preflight)
+    if not riservato:
+        logger.info("Comprensione brain bloccata dal budget preventivo (provider=%s): %s", ref.provider_type, motivo_budget)
+        return None, TentativoProvider(provider=ref.provider_type, model=ref.model, esito="ERRORE",
+                                        codice_errore="budget_insufficiente", messaggio=motivo_budget)
+
     api_key = await _resolve_api_key(db, org_id, ref)
     try:
         r = adapter.genera_json(
@@ -165,19 +198,69 @@ async def _prova_provider(db, org_id: str, ref: ProviderModelRef, contesto: Brai
             max_tokens=ref.max_tokens, timeout=ref.timeout, base_url=ref.base_url,
         )
     except llm_gateway.LLMGatewayError as exc:
+        # Nessun token consumato (l'adapter non e' mai arrivato a una
+        # risposta): la riserva va rilasciata, mai lasciata 'fantasma' a
+        # occupare il tetto per una chiamata che non e' avvenuta. Un
+        # timeout resta comunque un esito INCERTO (non "gratis", non
+        # "fallito in modo pulito"): tracciato col codice originale
+        # dell'adapter (tipicamente 'timeout'), mai ritentato alla cieca da
+        # QUESTA funzione (il chiamante decide se provare un provider
+        # diverso, mai lo stesso in automatico — vedi propose_plan sotto).
+        await cost_ledger.release_reservation(db, org_id=org_id, estimated_cost=stima_preflight)
         logger.info("Provider %s non disponibile (%s): %s", ref.provider_type, exc.codice, exc.messaggio)
         return None, TentativoProvider(provider=ref.provider_type, model=ref.model, esito="ERRORE",
                                         codice_errore=exc.codice, messaggio=exc.messaggio)
+
+    # Chiamata reale AVVENUTA a questo punto (l'adapter e' tornato senza
+    # sollevare LLMGatewayError): il costo va contabilizzato ORA, prima
+    # ancora di sapere se lo schema JSON sara' valido — un output non
+    # analizzabile e' comunque una chiamata reale gia' pagata, mai un
+    # "quindi non e' costato nulla". Stessa contabilizzazione (Tool
+    # Execution Gateway) usata da content_creator/pipeline.py per le
+    # chiamate reali di content-creator, ma con il prezzo REALE del
+    # provider/modello quando noto (pricing.py) — mai la stima generica di
+    # content-creator applicata indiscriminatamente a un modello diverso.
+    input_tokens = r.input_tokens
+    output_tokens = r.output_tokens
+    stima_costo_usd, prezzo_noto = pricing.costo_reale(
+        ref.provider_type, r.modello_effettivo or ref.model, input_tokens or 0, output_tokens or 0,
+        fallback_price_per_token=PRICE_PER_TOKEN,
+    )
+    try:
+        await tool_gateway.record_execution(
+            db, org_id=org_id, tool_id=tool_id, agent_id=_AGENTE_COMPRENSIONE,
+            actual_cost=stima_costo_usd, outcome="OK",
+        )
+    except Exception:
+        logger.exception("Registrazione costo comprensione brain fallita (provider=%s)", ref.provider_type)
+    finally:
+        # Riconciliazione: il costo VERO e' gia' in tool_cost_events sopra
+        # (quando la registrazione riesce) — la riserva preventiva (una
+        # stima) va sempre rilasciata qui, altrimenti sommerebbe stima E
+        # costo reale sullo stesso tetto giornaliero. Anche se
+        # record_execution sopra fallisce, la riserva resta a occupare il
+        # tetto solo fino al prossimo giorno (mai illimitatamente): scelta
+        # dichiarata, preferibile a rilasciarla e perdere la protezione se
+        # il costo reale finisse per non essere mai registrato.
+        await cost_ledger.reconcile_reservation(db, org_id=org_id, estimated_cost=stima_preflight)
+
+    if not prezzo_noto:
+        logger.info("Prezzo per provider=%s modello=%s non in tabella: usata la stima generica blended.",
+                   ref.provider_type, r.modello_effettivo or ref.model)
 
     try:
         from .llm_schema import parse_llm_proposal
         proposta = parse_llm_proposal(r.testo)
     except PropostaNonValida as exc:
         return None, TentativoProvider(provider=ref.provider_type, model=ref.model, esito="ERRORE",
-                                        codice_errore="risposta_non_valida", messaggio=exc.motivo, latenza_ms=r.latenza_ms)
+                                        codice_errore="risposta_non_valida", messaggio=exc.motivo, latenza_ms=r.latenza_ms,
+                                        input_tokens=input_tokens, output_tokens=output_tokens,
+                                        stima_costo_usd=stima_costo_usd, prezzo_noto=prezzo_noto)
 
     return proposta, TentativoProvider(provider=ref.provider_type, model=r.modello_effettivo or ref.model,
-                                        esito="OK", latenza_ms=r.latenza_ms)
+                                        esito="OK", latenza_ms=r.latenza_ms,
+                                        input_tokens=input_tokens, output_tokens=output_tokens,
+                                        stima_costo_usd=stima_costo_usd, prezzo_noto=prezzo_noto)
 
 
 async def propose_plan(db, org_id: str, goal_text: str, *, chiarimenti_precedenti: Optional[list] = None) -> LLMOrchestrationOutcome:

@@ -113,6 +113,9 @@ async def create_m2_indexes(db):
     await db.tasks.create_index("id", unique=True)
     await db.tasks.create_index([("plan_id", 1), ("seq", 1)], unique=True)
     await db.tasks.create_index("idempotency_key", unique=True)
+    # Avvio automatico dopo approvazione (engine.py::auto_dispatch_worker_loop):
+    # query sul solo marcatore persistito, mai sulla vecchia coda storica.
+    await db.tasks.create_index([("task_status", 1), ("auto_dispatch_requested_at", 1)])
 
     # Deliverable M2: chiave che include task_id + version (consente PIU' deliverable
     # dello stesso tipo nello stesso piano, uno per task/slot). Partial: solo record M2.
@@ -156,6 +159,43 @@ async def create_m2_indexes(db):
     )
     await db.handoffs.create_index("id", unique=True)
     await db.handoffs.create_index([("plan_id", 1)])
+
+    # Decisioni editoriali umane sulle singole bozze di un deliverable multi-item
+    # (es. social_content -> "posts"): al piu' UNA decisione per (deliverable,
+    # indice bozza, VERSIONE della bozza) — una decisione e' terminale solo
+    # per la versione a cui si riferisce, mai per la bozza in assoluto (una
+    # versione successiva, nata da una richiesta di modifica applicata, ha
+    # una propria decisione libera). Protezione atomica contro decisioni
+    # duplicate/in corsa, oltre al controllo applicativo in
+    # m2/deliverable_review.py.
+    await db.deliverable_item_decisions.create_index("id", unique=True)
+    # L'indice precedente (senza 'version', da una versione di questo codice
+    # precedente all'introduzione del versionamento per bozza) non viene mai
+    # sostituito automaticamente da create_index con un nome diverso — resta
+    # a imporre il proprio vincolo piu' restrittivo (una sola decisione per
+    # bozza IN ASSOLUTO) insieme al nuovo, bloccando la decisione di una
+    # versione 2 dopo la 1. Va rimosso esplicitamente, mai lasciato residuo.
+    try:
+        await db.deliverable_item_decisions.drop_index("uniq_decision_per_deliverable_item")
+    except Exception:
+        pass  # mai esistito in questo database: nulla da rimuovere.
+    await db.deliverable_item_decisions.create_index(
+        [("deliverable_id", 1), ("item_index", 1), ("version", 1)], unique=True,
+        name="uniq_decision_per_deliverable_item_version",
+    )
+    await db.deliverable_item_decisions.create_index([("plan_id", 1)])
+
+    # Versioni successive di UNA singola bozza (nate da una richiesta di
+    # modifica applicata esplicitamente): al piu' UNA versione N per
+    # (deliverable, indice bozza) — mai due modifiche concorrenti che
+    # producono la stessa versione. La versione 1 e' sempre il contenuto
+    # originale del deliverable (mai duplicata in questa collezione).
+    await db.deliverable_item_versions.create_index("id", unique=True)
+    await db.deliverable_item_versions.create_index(
+        [("deliverable_id", 1), ("item_index", 1), ("version", 1)], unique=True,
+        name="uniq_version_per_deliverable_item",
+    )
+    await db.deliverable_item_versions.create_index([("plan_id", 1)])
 
 
 async def swap_current_version(db, goal_id, new_plan_id, actor="system", audit=None):

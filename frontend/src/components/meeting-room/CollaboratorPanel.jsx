@@ -77,10 +77,25 @@ export default function CollaboratorPanel({ collaborator, summary, planId, onAct
             {summary.estimatedCost != null && (
               <SummaryRow icon={Coins} label="Costo stimato" value={`$${summary.estimatedCost.toFixed(5)}`} />
             )}
+            {summary.approvedCap != null && (
+              <SummaryRow icon={Coins} label="Tetto che autorizzi" value={`$${summary.approvedCap.toFixed(5)}`}
+                tone={summary.approvedCap > 0 ? "text-amber-400" : ""} />
+            )}
+            {summary.planMode && (
+              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground px-1" data-testid="sala-plan-mode">
+                <span>Modalità piano</span><span className="font-mono">{summary.planMode}</span>
+              </div>
+            )}
           </div>
         )}
         {planPendingApproval && (
           <div className="mt-4 pt-4 border-t border-border/60">
+            {summary?.approvedCap === 0 && (
+              <p className="text-[11px] text-amber-400 mb-2" data-testid="zero-cap-warning">
+                Tetto di spesa a $0.00000: nessuna chiamata reale a pagamento e' stata inclusa nel preventivo.
+                Verificare il piano prima di approvare se ti aspettavi un costo.
+              </p>
+            )}
             {canApprovePlan ? (
               <button
                 type="button"

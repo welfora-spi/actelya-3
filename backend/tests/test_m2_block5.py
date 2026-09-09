@@ -354,4 +354,11 @@ def test_http_create_plan_bloccato_reale_ma_http_tick_piano_esistente_no():
     creato_bloccato, tick_status, tick_res = run(scenario())
     assert creato_bloccato == 409
     assert tick_status == "ok"
-    assert tick_res.get("mode") == "SIMULAZIONE"
+    # http_tick() riflette la modalita' EFFETTIVA dell'organizzazione ORA (mai piu'
+    # un valore fisso — vedi m2/real_content.py): qui e' REALE perche' e' stata
+    # attivata dopo l'approvazione. Questo NON significa che i task del piano
+    # vengano eseguiti in reale: sono stati approvati mentre l'org era ancora in
+    # SIMULAZIONE (approved_mode="SIMULAZIONE" stampato all'approvazione), quindi
+    # restano deterministici — un'approvazione simulata non autorizza mai una
+    # spesa reale, nemmeno se l'org passa REALE in seguito.
+    assert tick_res.get("mode") == "REALE"

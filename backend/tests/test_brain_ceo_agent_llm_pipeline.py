@@ -609,4 +609,138 @@ def test_fallimento_provider_degrada_a_deterministico_piano_creato_comunque(monk
             await _cleanup(db, org)
             client.close()
 
+
+# ==================== Fix P0 UX: Clarification Engine ====================
+# Bug reale riscontrato durante un test utente: NEEDS_CLARIFICATION chiedeva
+# decine di campi (prezzi, competitor, ROAS, pixel, margini, target, pain
+# point, funnel, CRM, campagne precedenti, USP, testimonial, landing page...)
+# proposti liberamente dall'LLM in 'dati_mancanti', senza alcun vincolo di
+# quantita' ne' di indispensabilita'. Nessuno di questi dati e' mai
+# indispensabile per AVVIARE un piano utile: solo cio' che sopravvive al
+# filtro (llm_validator.py::classify_missing_data) puo' generare una
+# domanda, sempre capped a MAX_DOMANDE_CHIARIMENTO, e mai per piu' di un
+# ciclo di chiarimento.
+_DATI_MANCANTI_ALLUVIONE = [
+    "ROAS delle campagne pubblicitarie precedenti", "Pixel di tracciamento installato sul sito",
+    "Competitor principali del settore", "Margini di guadagno sul prodotto",
+    "Testimonial dei clienti esistenti", "Storico delle campagne precedenti",
+    "Target demografico di riferimento",
+    "Budget mensile disponibile per l'iniziativa", "Nome del referente commerciale interno",
+]
+
+
+def test_clarification_engine_filtra_i_dati_non_indispensabili(monkeypatch):
+    async def scenario():
+        client, db = _db()
+        org = f"org-test-{uuid.uuid4().hex[:8]}"
+        try:
+            await M.create_m2_indexes(db)
+            await db.settings.update_one({"id": org}, {"$set": {"id": org, "ai_real_mode": True}}, upsert=True)
+            await db.ai_connections.insert_one(_connessione(org))
+
+            adapter = llm_gateway.OpenAIAdapter()
+            monkeypatch.setattr(adapter, "genera_json", lambda **kw: LLMResult(
+                testo=_proposta_json(dati_mancanti=_DATI_MANCANTI_ALLUVIONE),
+                provider="openai", modello_effettivo="gpt-4o",
+                latenza_ms=12, input_tokens=10, output_tokens=10, troncata=False,
+            ))
+            monkeypatch.setattr(llm_gateway, "ADAPTERS", {**llm_gateway.ADAPTERS, "openai": adapter})
+
+            res = await SVC.create_plan_with_brain(db, org, "user-test", FOCACCINE_GOAL)
+            assert res["status"] == "NEEDS_CLARIFICATION", res
+            domande = res["clarifying_questions"]
+            # Solo i due dati genuinamente non recuperabili/non opzionali restano
+            # come domanda: mai un form da 9 campi per un solo ciclo.
+            assert len(domande) <= 2, domande
+            for non_indispensabile in ("ROAS", "Pixel", "Competitor", "Margini", "Testimonial", "Storico", "Target"):
+                assert not any(non_indispensabile.lower() in d.lower() for d in domande), (non_indispensabile, domande)
+
+            non_disponibili = res["normalized_plan"]["dati_non_disponibili"]
+            assert any("roas" in d.lower() for d in non_disponibili)
+            assert any("pixel" in d.lower() for d in non_disponibili)
+            assert any("competitor" in d.lower() for d in non_disponibili)
+            return True
+        finally:
+            await _cleanup(db, org)
+            client.close()
+
+    assert run(scenario())
+
+
+def test_clarification_engine_cap_massimo_domande_per_ciclo(monkeypatch):
+    async def scenario():
+        client, db = _db()
+        org = f"org-test-{uuid.uuid4().hex[:8]}"
+        try:
+            await M.create_m2_indexes(db)
+            await db.settings.update_one({"id": org}, {"$set": {"id": org, "ai_real_mode": True}}, upsert=True)
+            await db.ai_connections.insert_one(_connessione(org))
+
+            dati_generici = [f"Informazione aziendale numero {i}, non altrimenti classificabile" for i in range(8)]
+            adapter = llm_gateway.OpenAIAdapter()
+            monkeypatch.setattr(adapter, "genera_json", lambda **kw: LLMResult(
+                testo=_proposta_json(dati_mancanti=dati_generici),
+                provider="openai", modello_effettivo="gpt-4o",
+                latenza_ms=12, input_tokens=10, output_tokens=10, troncata=False,
+            ))
+            monkeypatch.setattr(llm_gateway, "ADAPTERS", {**llm_gateway.ADAPTERS, "openai": adapter})
+
+            res = await SVC.create_plan_with_brain(db, org, "user-test", FOCACCINE_GOAL)
+            assert res["status"] == "NEEDS_CLARIFICATION", res
+            assert len(res["clarifying_questions"]) == 5  # MAX_DOMANDE_CHIARIMENTO, mai di piu'
+            assert len(res["normalized_plan"]["dati_non_disponibili"]) == 3  # le eccedenti, mai perse in silenzio
+            return True
+        finally:
+            await _cleanup(db, org)
+            client.close()
+
+    assert run(scenario())
+
+
+def test_clarification_engine_max_un_ciclo_poi_procede_comunque(monkeypatch):
+    """Dopo un solo ciclo di chiarimento, anche se restano domande aperte
+    (qui: lo stesso mock ripropone la stessa alluvione), il Brain deve
+    procedere alla creazione del piano dichiarando i dati ancora mancanti,
+    mai chiedere una seconda volta ne' inventare i dati."""
+    async def scenario():
+        client, db = _db()
+        org = f"org-test-{uuid.uuid4().hex[:8]}"
+        try:
+            await M.create_m2_indexes(db)
+            await db.settings.update_one({"id": org}, {"$set": {"id": org, "ai_real_mode": True}}, upsert=True)
+            await db.ai_connections.insert_one(_connessione(org))
+
+            adapter = llm_gateway.OpenAIAdapter()
+            monkeypatch.setattr(adapter, "genera_json", lambda **kw: LLMResult(
+                testo=_proposta_json(dati_mancanti=_DATI_MANCANTI_ALLUVIONE),
+                provider="openai", modello_effettivo="gpt-4o",
+                latenza_ms=12, input_tokens=10, output_tokens=10, troncata=False,
+            ))
+            monkeypatch.setattr(llm_gateway, "ADAPTERS", {**llm_gateway.ADAPTERS, "openai": adapter})
+
+            primo = await SVC.create_plan_with_brain(db, org, "user-test", FOCACCINE_GOAL)
+            assert primo["status"] == "NEEDS_CLARIFICATION", primo
+            domande = primo["clarifying_questions"]
+            sid = primo["session_id"]
+
+            secondo = await SVC.create_plan_with_brain(
+                db, org, "user-test", FOCACCINE_GOAL, session_id=sid,
+                clarification={
+                    "missing_information": domande, "questions": domande,
+                    "answers": ["risposta fornita dall'utente"] * len(domande),
+                },
+            )
+            assert secondo["status"] == "READY", secondo
+            assert secondo["plan"] is not None
+            assert secondo["tasks"]
+            # I dati ancora non risolti dal secondo giro restano dichiarati,
+            # mai inventati, mai un terzo giro di domande.
+            assert secondo["normalized_plan"]["dati_non_disponibili"]
+            return True
+        finally:
+            await _cleanup(db, org)
+            client.close()
+
+    assert run(scenario())
+
     assert run(scenario())
